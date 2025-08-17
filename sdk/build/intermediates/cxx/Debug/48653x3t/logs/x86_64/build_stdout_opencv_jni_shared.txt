@@ -1,0 +1,2 @@
+ninja: Entering directory `D:\SharpCheck\sdk\.cxx\Debug\48653x3t\x86_64'
+ninja: no work to do.
