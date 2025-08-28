@@ -1,19 +1,87 @@
 package com.example.blurdetectionapp;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
+import android.net.Uri;
 import android.util.Log;
 
 import androidx.exifinterface.media.ExifInterface;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 
 public class ImageProcessor {
 
     private static final String TAG = "ImageProcessor";
     private static final int MAX_IMAGE_DIMENSION = 1024; // Optimized for performance
+
+
+    // Add this method to your ImageProcessor class
+
+    public Bitmap loadAndPrepareImageFromUri(Context context, Uri imageUri) {
+        try {
+            // Load bitmap from URI
+            InputStream inputStream = context.getContentResolver().openInputStream(imageUri);
+            if (inputStream == null) {
+                Log.e("ImageProcessor", "Failed to open input stream for URI: " + imageUri);
+                return null;
+            }
+
+            // Decode bitmap with options to avoid OOM
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            BitmapFactory.decodeStream(inputStream, null, options);
+            inputStream.close();
+
+            // Calculate inSampleSize
+            options.inSampleSize = calculateInSampleSize(options, 1024, 1024);
+            options.inJustDecodeBounds = false;
+
+            // Decode the actual bitmap
+            inputStream = context.getContentResolver().openInputStream(imageUri);
+            Bitmap bitmap = BitmapFactory.decodeStream(inputStream, null, options);
+            inputStream.close();
+
+            if (bitmap == null) {
+                Log.e("ImageProcessor", "Failed to decode bitmap from URI");
+                return null;
+            }
+
+            // Apply the same processing as file-based images
+            return processLoadedBitmap(bitmap);
+
+        } catch (Exception e) {
+            Log.e("ImageProcessor", "Error loading image from URI: " + imageUri, e);
+            return null;
+        }
+    }
+
+    private int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+
+        if (height > reqHeight || width > reqWidth) {
+            final int halfHeight = height / 2;
+            final int halfWidth = width / 2;
+
+            while ((halfHeight / inSampleSize) >= reqHeight
+                    && (halfWidth / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2;
+            }
+        }
+        return inSampleSize;
+    }
+
+    // Assuming you have a method like this for common processing
+    private Bitmap processLoadedBitmap(Bitmap bitmap) {
+        // Apply any common processing (rotation correction, scaling, etc.)
+        // This should contain the same logic you use in loadAndPrepareImage()
+        return bitmap;
+    }
 
     /**
      * Load and prepare image from file path

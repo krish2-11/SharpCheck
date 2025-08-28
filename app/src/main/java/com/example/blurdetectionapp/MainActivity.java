@@ -28,13 +28,16 @@ import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "BlurDetectObjDetect";
     private static final int REQUEST_TAKE_PHOTO = 1001;
+    private static final int REQUEST_PICK_IMAGE = 1002;
     private static final int CAMERA_PERMISSION_CODE = 2001;
+    private static final int STORAGE_PERMISSION_CODE = 2002;
 
     // UI Components
     private ImageView originalImageView;
@@ -42,6 +45,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView statusText;
     private TextView detectionResults;
     private Button captureButton;
+    private Button galleryButton;
     private Button retakeButton;
     private ProgressBar progressBar;
 
@@ -51,6 +55,7 @@ public class MainActivity extends AppCompatActivity {
     private ObjectDetector objectDetector;
 
     private String currentPhotoPath;
+    private Uri selectedImageUri;
     private Bitmap originalBitmap;
 
     static {
@@ -73,9 +78,11 @@ public class MainActivity extends AppCompatActivity {
 
     private void initializeComponents() {
         imageProcessor = new ImageProcessor();
-        blurDetector = new BlurDetector();
+        blurDetector = new BlurDetector(); // Keep for backward compatibility
         objectDetector = new ObjectDetector();
     }
+
+
 
     private void initializeViews() {
         originalImageView = findViewById(R.id.originalImageView);
@@ -83,6 +90,7 @@ public class MainActivity extends AppCompatActivity {
         statusText = findViewById(R.id.statusText);
         detectionResults = findViewById(R.id.detectionResults);
         captureButton = findViewById(R.id.captureButton);
+        galleryButton = findViewById(R.id.galleryButton);
         retakeButton = findViewById(R.id.retakeButton);
         progressBar = findViewById(R.id.progressBar);
 
@@ -101,6 +109,7 @@ public class MainActivity extends AppCompatActivity {
         if (statusText == null) Log.e(TAG, "statusText not found");
         if (detectionResults == null) Log.e(TAG, "detectionResults not found");
         if (captureButton == null) Log.e(TAG, "captureButton not found");
+        if (galleryButton == null) Log.e(TAG, "galleryButton not found");
         if (retakeButton == null) Log.e(TAG, "retakeButton not found");
         if (progressBar == null) Log.e(TAG, "progressBar not found");
     }
@@ -108,6 +117,9 @@ public class MainActivity extends AppCompatActivity {
     private void setupClickListeners() {
         if (captureButton != null) {
             captureButton.setOnClickListener(v -> checkCameraPermissionAndCapture());
+        }
+        if (galleryButton != null) {
+            galleryButton.setOnClickListener(v -> checkStoragePermissionAndPickImage());
         }
         if (retakeButton != null) {
             retakeButton.setOnClickListener(v -> resetForNewCapture());
@@ -124,6 +136,20 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void checkStoragePermissionAndPickImage() {
+        // For Android 13+ (API 33+), we need READ_MEDIA_IMAGES permission
+        // For older versions, we need READ_EXTERNAL_STORAGE
+        String permission = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU
+                ? android.Manifest.permission.READ_MEDIA_IMAGES
+                : android.Manifest.permission.READ_EXTERNAL_STORAGE;
+
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{permission}, STORAGE_PERMISSION_CODE);
+        } else {
+            dispatchPickImageIntent();
+        }
+    }
+
     private void resetForNewCapture() {
         if (originalImageView != null) {
             originalImageView.setImageDrawable(null);
@@ -133,7 +159,7 @@ public class MainActivity extends AppCompatActivity {
             processedImageView.setVisibility(View.GONE);
         }
         if (statusText != null) {
-            statusText.setText("Ready to capture image");
+            statusText.setText("Ready to capture or select image");
         }
         if (detectionResults != null) {
             detectionResults.setText("");
@@ -141,12 +167,20 @@ public class MainActivity extends AppCompatActivity {
         if (captureButton != null) {
             captureButton.setVisibility(View.VISIBLE);
         }
+        if (galleryButton != null) {
+            galleryButton.setVisibility(View.VISIBLE);
+        }
         if (retakeButton != null) {
             retakeButton.setVisibility(View.GONE);
         }
         if (progressBar != null) {
             progressBar.setVisibility(View.GONE);
         }
+
+        // Clear stored paths/URIs
+        currentPhotoPath = null;
+        selectedImageUri = null;
+        originalBitmap = null;
     }
 
     private File createImageFile() throws IOException {
@@ -188,18 +222,49 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void dispatchPickImageIntent() {
+        Intent pickImageIntent = new Intent(Intent.ACTION_PICK);
+        pickImageIntent.setType("image/*");
+
+        // Alternative approach using ACTION_GET_CONTENT for broader compatibility
+        Intent getContentIntent = new Intent(Intent.ACTION_GET_CONTENT);
+        getContentIntent.setType("image/*");
+        getContentIntent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        Intent chooserIntent = Intent.createChooser(getContentIntent, "Select Image");
+        chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{pickImageIntent});
+
+        try {
+            startActivityForResult(chooserIntent, REQUEST_PICK_IMAGE);
+        } catch (Exception e) {
+            Log.e(TAG, "Error opening gallery", e);
+            showToast("Error accessing gallery: " + e.getMessage());
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
-        if (requestCode == REQUEST_TAKE_PHOTO) {
-            if (resultCode == RESULT_OK) {
+        if (resultCode == RESULT_OK) {
+            if (requestCode == REQUEST_TAKE_PHOTO) {
                 Log.d(TAG, "Image captured successfully, starting processing");
+                selectedImageUri = null; // Clear gallery selection
                 processImage();
-            } else {
-                Log.w(TAG, "Image capture cancelled or failed");
-                showToast("Image capture cancelled");
+            } else if (requestCode == REQUEST_PICK_IMAGE && data != null) {
+                selectedImageUri = data.getData();
+                if (selectedImageUri != null) {
+                    Log.d(TAG, "Image selected from gallery: " + selectedImageUri.toString());
+                    currentPhotoPath = null; // Clear camera capture path
+                    processImage();
+                } else {
+                    Log.w(TAG, "No image URI received from gallery");
+                    showToast("Failed to get image from gallery");
+                }
             }
+        } else {
+            Log.w(TAG, "Image capture/selection cancelled or failed");
+            showToast(requestCode == REQUEST_TAKE_PHOTO ? "Image capture cancelled" : "Image selection cancelled");
         }
     }
 
@@ -209,10 +274,19 @@ public class MainActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                Log.d(TAG, "Starting image processing");
+                Log.d(TAG, "Starting image processing with blur detection and deblurring");
 
-                // Load and prepare image
-                originalBitmap = imageProcessor.loadAndPrepareImage(currentPhotoPath);
+                // Load and prepare image from either camera or gallery
+                if (selectedImageUri != null) {
+                    // Image from gallery
+                    originalBitmap = imageProcessor.loadAndPrepareImageFromUri(this, selectedImageUri);
+                } else if (currentPhotoPath != null) {
+                    // Image from camera
+                    originalBitmap = imageProcessor.loadAndPrepareImage(currentPhotoPath);
+                } else {
+                    throw new RuntimeException("No valid image source found");
+                }
+
                 if (originalBitmap == null) {
                     throw new RuntimeException("Failed to load image bitmap");
                 }
@@ -223,31 +297,33 @@ public class MainActivity extends AppCompatActivity {
                     if (originalImageView != null) {
                         originalImageView.setImageBitmap(originalBitmap);
                     }
-                    updateStatus("Checking image quality...");
+                    updateStatus("Detecting and processing blurred objects...");
                 });
 
-                // Check for blur
-                BlurResult blurResult = blurDetector.detectBlur(originalBitmap);
-                Log.d(TAG, "Blur detection completed: " + blurResult.isBlurred());
+                // NEW: Blur detection and deblurring pipeline
+                BlurDetectionController blurController = new BlurDetectionController();
+                BlurDetectionControllerResult blurResult = blurController.processImage(originalBitmap);
+
+                Log.d(TAG, "Blur processing completed: " + blurResult.getMessage());
+
+                // Get the processed image (either deblurred or original if no blur detected)
+                Bitmap processedBitmap = blurResult.getProcessedImage();
 
                 runOnUiThread(() -> {
-                    if (blurResult.isBlurred()) {
-                        handleBlurredImage(blurResult);
-                        return;
-                    }
-                    updateStatus("Detecting objects...");
+                    updateStatus("Detecting objects in processed image...");
+
+                    // Display blur processing results
+                    displayBlurResults(blurResult);
                 });
 
-                if (!blurResult.isBlurred()) {
-                    // Perform object detection
-                    Log.d(TAG, "Starting object detection");
-                    ObjectDetectionResult detectionResult = objectDetector.detectObjects(originalBitmap);
-                    Log.d(TAG, "Object detection completed, found: " + detectionResult.getDetectedObjects().size() + " objects");
+                // Now perform object detection on the processed (potentially deblurred) image
+                Log.d(TAG, "Starting object detection on processed image");
+                ObjectDetectionResult detectionResult = objectDetector.detectObjects(processedBitmap);
+                Log.d(TAG, "Object detection completed, found: " + detectionResult.getDetectedObjects().size() + " objects");
 
-                    runOnUiThread(() -> {
-                        displayResults(detectionResult);
-                    });
-                }
+                runOnUiThread(() -> {
+                    displayFinalResults(detectionResult, blurResult);
+                });
 
             } catch (Exception e) {
                 Log.e(TAG, "Error processing image", e);
@@ -261,11 +337,149 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
+    // NEW: Method to display blur processing results
+    private void displayBlurResults(BlurDetectionControllerResult blurResult) {
+        if (detectionResults == null) return;
+
+        StringBuilder blurInfo = new StringBuilder();
+
+        if (!blurResult.hadBlurredObjects()) {
+            blurInfo.append("✓ Image Quality: Good\n");
+            blurInfo.append("• No blurred objects detected\n");
+            blurInfo.append("• Ready for object detection\n\n");
+        } else {
+            blurInfo.append("🔧 Blur Processing Results:\n");
+            blurInfo.append(String.format("• Total objects found: %d\n", blurResult.getTotalObjectsDetected()));
+            blurInfo.append(String.format("• Blurred objects: %d\n", blurResult.getBlurredObjectsCount()));
+
+            if (blurResult.wasDeblurred()) {
+                blurInfo.append("✓ Successfully deblurred objects\n");
+
+                // Show quality improvements if available
+                if (blurResult.getDeblurringResult() != null) {
+                    List<DeblurredObject> deblurredObjects = blurResult.getDeblurringResult().getDeblurredObjects();
+                    if (!deblurredObjects.isEmpty()) {
+                        double avgImprovement = 0.0;
+                        for (DeblurredObject obj : deblurredObjects) {
+                            avgImprovement += obj.getQualityImprovement();
+                        }
+                        avgImprovement /= deblurredObjects.size();
+                        blurInfo.append(String.format("• Average quality improvement: %.1f%%\n", avgImprovement));
+                    }
+                }
+            } else {
+                blurInfo.append("⚠ Deblurring partially successful\n");
+            }
+            blurInfo.append("\n");
+        }
+
+        // Store blur info to be combined with object detection results later
+        String currentText = detectionResults.getText().toString();
+        detectionResults.setText(blurInfo.toString() + currentText);
+    }
+
+    // NEW: Enhanced method to display final results combining blur and object detection
+    private void displayFinalResults(ObjectDetectionResult objectResult, BlurDetectionControllerResult blurResult) {
+        try {
+            // Display processed image (potentially deblurred)
+            if (objectResult.getProcessedImage() != null && processedImageView != null) {
+                processedImageView.setImageBitmap(objectResult.getProcessedImage());
+                processedImageView.setVisibility(View.VISIBLE);
+            }
+
+            // Combine blur processing and object detection results
+            StringBuilder fullResults = new StringBuilder();
+
+            // Blur processing summary
+            if (blurResult.hadBlurredObjects()) {
+                fullResults.append("🔧 BLUR PROCESSING:\n");
+                fullResults.append(String.format("• Objects found: %d (Blurred: %d)\n",
+                        blurResult.getTotalObjectsDetected(), blurResult.getBlurredObjectsCount()));
+
+                if (blurResult.wasDeblurred()) {
+                    fullResults.append("• Status: ✓ Successfully deblurred\n");
+
+                    // Show detailed blur metrics if available
+                    if (blurResult.getDeblurringResult() != null) {
+                        List<DeblurredObject> deblurredObjs = blurResult.getDeblurringResult().getDeblurredObjects();
+                        for (int i = 0; i < Math.min(3, deblurredObjs.size()); i++) {
+                            DeblurredObject obj = deblurredObjs.get(i);
+                            BlurredObject original = obj.getOriginalObject();
+                            fullResults.append(String.format("  - Object %d: %.1f%% improvement (Method: %s)\n",
+                                    i + 1, obj.getQualityImprovement(), original.getDetectionMethod()));
+                        }
+                        if (deblurredObjs.size() > 3) {
+                            fullResults.append(String.format("  - ... and %d more objects\n", deblurredObjs.size() - 3));
+                        }
+                    }
+                } else {
+                    fullResults.append("• Status: ⚠ Partial success\n");
+                }
+                fullResults.append("\n");
+            } else {
+                fullResults.append("✓ IMAGE QUALITY: Good (No blur detected)\n\n");
+            }
+
+            // Object detection results
+            fullResults.append("🔍 OBJECT DETECTION:\n");
+
+            if (objectResult.getDetectedObjects().isEmpty()) {
+                updateStatus("Processing complete - No objects detected");
+                fullResults.append("• No objects detected in processed image\n\n");
+                fullResults.append("Tips for better detection:\n");
+                fullResults.append("  - Ensure good lighting\n");
+                fullResults.append("  - Use plain background\n");
+                fullResults.append("  - Keep objects separated\n");
+                fullResults.append("  - Ensure objects are in focus\n");
+            } else {
+                updateStatus(String.format(Locale.getDefault(),
+                        "Processing complete - Found %d object(s)", objectResult.getDetectedObjects().size()));
+
+                fullResults.append(String.format("• Successfully detected %d objects:\n\n",
+                        objectResult.getDetectedObjects().size()));
+
+                // Show detailed object information
+                List<DetectedObject> objects = objectResult.getDetectedObjects();
+                for (int i = 0; i < objects.size(); i++) {
+                    DetectedObject obj = objects.get(i);
+                    fullResults.append(String.format("Object %d:\n", i + 1));
+                    fullResults.append(String.format("  • Shape: %s\n", obj.getShapeType()));
+                    fullResults.append(String.format("  • Area: %.0f pixels\n", obj.getArea()));
+                    fullResults.append(String.format("  • Roundness: %.2f\n", obj.getRoundness()));
+                    fullResults.append(String.format("  • Aspect Ratio: %.2f\n", obj.getAspectRatio()));
+                    fullResults.append("\n");
+                }
+            }
+
+            // Processing summary
+            fullResults.append("📊 PROCESSING SUMMARY:\n");
+            fullResults.append(String.format("• Pipeline: %s\n",
+                    blurResult.isSuccess() ? "✓ Successful" : "⚠ Partial"));
+            if (blurResult.hadBlurredObjects()) {
+                fullResults.append(String.format("• Blur correction: %s\n",
+                        blurResult.wasDeblurred() ? "✓ Applied" : "⚠ Limited"));
+            }
+            fullResults.append(String.format("• Final object count: %d\n", objectResult.getDetectedObjects().size()));
+
+            if (detectionResults != null) {
+                detectionResults.setText(fullResults.toString());
+            }
+
+            showRetakeButton();
+            showProgressBar(false);
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error displaying final results", e);
+            updateStatus("Error displaying results");
+            showProgressBar(false);
+        }
+    }
+
     private void handleBlurredImage(BlurResult blurResult) {
         updateStatus("Image is blurred - quality too low for object detection");
         if (detectionResults != null) {
             String blurInfo = String.format(Locale.getDefault(),
-                    "Blur Analysis:\n• Laplacian Variance: %.2f\n• Tenengrad Score: %.2f\n• Edge Density: %.2f\n\nImage is too blurry for accurate object detection.\nPlease retake with better focus.",
+                    "Blur Analysis:\n• Laplacian Variance: %.2f\n• Tenengrad Score: %.2f\n• Edge Density: %.2f\n\nImage is too blurry for accurate object detection.\nPlease try with a clearer image.",
                     blurResult.getLaplacianVariance(),
                     blurResult.getTenengradScore(),
                     blurResult.getEdgeDensity());
@@ -324,6 +538,9 @@ public class MainActivity extends AppCompatActivity {
         if (captureButton != null) {
             captureButton.setVisibility(View.GONE);
         }
+        if (galleryButton != null) {
+            galleryButton.setVisibility(View.GONE);
+        }
         if (retakeButton != null) {
             retakeButton.setVisibility(View.VISIBLE);
         }
@@ -349,12 +566,18 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == CAMERA_PERMISSION_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (requestCode == CAMERA_PERMISSION_CODE) {
                 dispatchTakePictureIntent();
-            } else {
-                showToast("Camera permission is required to take photos");
+            } else if (requestCode == STORAGE_PERMISSION_CODE) {
+                dispatchPickImageIntent();
             }
+        } else {
+            String message = (requestCode == CAMERA_PERMISSION_CODE)
+                    ? "Camera permission is required to take photos"
+                    : "Storage permission is required to access gallery";
+            showToast(message);
         }
     }
 }

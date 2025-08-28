@@ -70,7 +70,7 @@ public class ObjectDetector {
             // Method 2: HSV color segmentation with texture filtering
             List<DetectedObject> hsvObjects = detectWithHSVSegmentation(originalSrc);
 
-            // Method 3: Shape-based filtering (rice grains have specific characteristics)
+            // Method 3: Shape-based filtering
             List<DetectedObject> shapeObjects = detectWithShapeAnalysis(originalSrc);
 
             // Combine results with smart filtering
@@ -109,7 +109,7 @@ public class ObjectDetector {
     }
 
     /**
-     * Method 1: HSV-based color segmentation for furniture and large objects
+     * Method 1: HSV-based color segmentation
      */
     private List<DetectedObject> detectWithHSVSegmentation(Mat src) {
         Mat hsv = null;
