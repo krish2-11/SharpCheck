@@ -25,6 +25,7 @@ import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LifecycleOwner;
 
+import com.example.blurdetectionapp.utils.BlurDetector;
 import com.example.blurdetectionapp.utils.LightingAnalyzer;
 import com.google.common.util.concurrent.ListenableFuture;
 
@@ -60,6 +61,15 @@ public class CameraManager {
         void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result);
     }
 
+    //new callback interface for live blur detection
+    public interface BlurAnalysisCallback {
+        void onBlurAnalyzed(BlurDetector.BlurDetectionResult result);
+    }
+    private BlurAnalysisCallback blurCallback;
+    public void setBlurAnalysisCallback(BlurAnalysisCallback callback) {
+        this.blurCallback = callback;
+    }
+
     public interface ImageCaptureCallback {
         void onImageCaptured(Bitmap bitmap);
         void onCaptureError(String error);
@@ -76,9 +86,11 @@ public class CameraManager {
      */
     public void initializeCamera(PreviewView previewView,
                                  LightingAnalysisCallback lightingCallback,
-                                 ImageCaptureCallback captureCallback) {
+                                 ImageCaptureCallback captureCallback,
+                                 BlurAnalysisCallback blurCallback) {
         this.lightingCallback = lightingCallback;
         this.captureCallback = captureCallback;
+        this.blurCallback = blurCallback;
 
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture =
                 ProcessCameraProvider.getInstance(context);
@@ -110,14 +122,23 @@ public class CameraManager {
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .build();
 
-        // Image analysis use case for live lighting detection
-        imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(640, 480)) // Lower resolution for faster analysis
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888) // ADD THIS
-                .build();
+//        // Image analysis use case for live lighting detection
+//        imageAnalysis = new ImageAnalysis.Builder()
+//                .setTargetResolution(new Size(640, 480)) // Lower resolution for faster analysis
+//                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+//                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888) // ADD THIS
+//                .build();
+//
+//        imageAnalysis.setAnalyzer(cameraExecutor, new LightingImageAnalyzer());
 
-        imageAnalysis.setAnalyzer(cameraExecutor, new LightingImageAnalyzer());
+        // Image analysis use case for live lighting detection and blur detection
+        imageAnalysis = new ImageAnalysis.Builder()
+                .setTargetResolution(new Size(640, 480))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                .build();
+        // Set a combined analyzer that runs both lighting and blur analysis
+        imageAnalysis.setAnalyzer(cameraExecutor, new CombinedImageAnalyzer());
 
         // Camera selector (back camera)
         CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
@@ -141,6 +162,51 @@ public class CameraManager {
             Log.e(TAG, "Failed to start camera", e);
         }
     }
+
+    // Combined analyzer for lighting and blur
+    private class CombinedImageAnalyzer implements ImageAnalysis.Analyzer {
+        private long lastAnalysisTime = 0;
+        private static final long ANALYSIS_INTERVAL = 500; // ms
+
+        @Override
+        public void analyze(@NonNull ImageProxy image) {
+            long currentTime = System.currentTimeMillis();
+            if (currentTime - lastAnalysisTime < ANALYSIS_INTERVAL) {
+                image.close();
+                return;
+            }
+            lastAnalysisTime = currentTime;
+
+            Bitmap bitmap = imageProxyToBitmap(image);
+            image.close();
+
+            if (bitmap == null) return;
+
+            if (frameAnalyzerCallback != null) {
+                ContextCompat.getMainExecutor(context).execute(() -> {
+                    frameAnalyzerCallback.onFrameAnalyzed(bitmap);
+                });
+            }
+
+            // Lighting analysis
+            if (lightingCallback != null) {
+                LightingAnalyzer.LightingAnalysisResult lightingResult =
+                        LightingAnalyzer.analyzeLighting(bitmap);
+                ContextCompat.getMainExecutor(context).execute(() -> {
+                    lightingCallback.onLightingAnalyzed(lightingResult);
+                });
+            }
+
+            // Blur analysis
+            if (blurCallback != null) {
+                BlurDetector.BlurDetectionResult blurResult = BlurDetector.detectBlur(bitmap);
+                ContextCompat.getMainExecutor(context).execute(() -> {
+                    blurCallback.onBlurAnalyzed(blurResult);
+                });
+            }
+        }
+    }
+
 
     /**
      * Capture image
@@ -191,6 +257,14 @@ public class CameraManager {
                     public void onCaptureSuccess(@NonNull ImageProxy image) {
                         // Convert ImageProxy to Bitmap
                         Bitmap bitmap = imageProxyToBitmap(image);
+
+                        // 🔑 Fix orientation
+                        int rotation = image.getImageInfo().getRotationDegrees();
+                        if (bitmap != null) {
+                            bitmap = rotateBitmap(bitmap, rotation);
+                        }
+
+
                         image.close();
 
                         if (captureCallback != null && bitmap != null) {
@@ -292,6 +366,11 @@ public class CameraManager {
                 // Convert to bitmap for analysis
                 Bitmap bitmap = imageProxyToBitmap(image);
 
+                int rotation = image.getImageInfo().getRotationDegrees();
+                if (bitmap != null) {
+                    bitmap = rotateBitmap(bitmap, rotation);
+                }
+
                 if (bitmap != null && lightingCallback != null) {
                     // Perform lighting analysis
                     LightingAnalyzer.LightingAnalysisResult result =
@@ -301,6 +380,10 @@ public class CameraManager {
                     ContextCompat.getMainExecutor(context).execute(() -> {
                         lightingCallback.onLightingAnalyzed(result);
                     });
+                }
+
+                if(bitmap != null && frameAnalyzerCallback != null){
+                    frameAnalyzerCallback.onFrameAnalyzed(bitmap);
                 }
 
             } catch (Exception e) {
@@ -327,6 +410,12 @@ public class CameraManager {
         }
     }
 
+    private Bitmap rotateBitmap(Bitmap source, float angle) {
+        android.graphics.Matrix matrix = new android.graphics.Matrix();
+        matrix.postRotate(angle);
+        return Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
+    }
+
     /**
      * Shutdown camera
      */
@@ -335,5 +424,15 @@ public class CameraManager {
             cameraProvider.unbindAll();
         }
         cameraExecutor.shutdown();
+    }
+
+    public interface FrameAnalyzerCallback {
+        void onFrameAnalyzed(Bitmap bitmap);
+    }
+
+    private FrameAnalyzerCallback frameAnalyzerCallback;
+
+    public void setFrameAnalyzerCallback(FrameAnalyzerCallback callback) {
+        this.frameAnalyzerCallback = callback;
     }
 }

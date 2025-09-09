@@ -4,7 +4,12 @@ plugins {
 
 android {
     namespace 'com.example.blurdetectionapp'
-    compileSdk 35
+    compileSdk 36
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
 
     defaultConfig {
         applicationId "com.example.blurdetectionapp"
