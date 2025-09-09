@@ -1,0 +1,195 @@
+package com.example.blurdetectionapp.utils;
+
+import android.graphics.Bitmap;
+import android.util.Log;
+
+import org.opencv.android.Utils;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.MatOfPoint;
+import org.opencv.core.MatOfPoint2f;
+import org.opencv.core.Point;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+
+/**
+ * Utility class for document detection and corner processing
+ */
+public class DocumentDetection {
+
+    private static final String TAG = "DocumentDetection";
+
+    private Point[] lastCorners = null;
+
+    /**
+     * Detects document corners and returns them as Point[]
+     */
+    public Point[] detectDocumentCornersPoints(Bitmap bitmap) {
+        Mat mat = new Mat();
+        Utils.bitmapToMat(bitmap, mat);
+
+        // Convert to grayscale
+        Mat grayMat = new Mat();
+        Imgproc.cvtColor(mat, grayMat, Imgproc.COLOR_RGBA2GRAY);
+
+        // Gaussian blur
+        Imgproc.GaussianBlur(grayMat, grayMat, new Size(5, 5), 0);
+
+        // Adaptive threshold (better for uneven lighting)
+        Mat binMat = new Mat();
+        Imgproc.adaptiveThreshold(grayMat, binMat, 255,
+                Imgproc.ADAPTIVE_THRESH_MEAN_C,
+                Imgproc.THRESH_BINARY_INV, 13, 5);
+
+        // Canny edge detection
+        Mat edges = new Mat();
+        Imgproc.Canny(binMat, edges, 80, 200);
+
+        // Morphological close
+        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
+        Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel);
+
+        // Find contours
+        List<MatOfPoint> contours = new ArrayList<>();
+        Mat hierarchy = new Mat();
+        Imgproc.findContours(edges, contours, hierarchy,
+                Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
+
+        Log.d(TAG, "Total contours found: " + contours.size());
+
+        // Sort by area
+        contours.sort((c1, c2) ->
+                Double.compare(Imgproc.contourArea(c2), Imgproc.contourArea(c1)));
+
+        int imgArea = mat.cols() * mat.rows();
+        double minArea = imgArea * 0.1;
+
+        // Find largest quadrilateral
+        MatOfPoint2f approxCurve = new MatOfPoint2f();
+        for (MatOfPoint contour : contours) {
+            double area = Imgproc.contourArea(contour);
+            if (area < minArea) continue;
+            double peri = Imgproc.arcLength(new MatOfPoint2f(contour.toArray()), true);
+            Imgproc.approxPolyDP(new MatOfPoint2f(contour.toArray()), approxCurve,
+                    0.02 * peri, true);
+
+            if (approxCurve.total() == 4) {
+                Point[] corners = approxCurve.toArray();
+                Point[] sorted = sortCorners(corners);
+
+                // Optional smoothing
+                if (lastCorners != null && lastCorners.length == 4) {
+                    double dist = 0;
+                    for (int i = 0; i < 4; i++) {
+                        dist += distance(sorted[i], lastCorners[i]);
+                    }
+                    double MIN_UPDATE_DIST = 35.0;
+                    if (dist < MIN_UPDATE_DIST) {
+                        sorted = smoothCorners(sorted, lastCorners);
+                    }
+                }
+
+                lastCorners = sorted;
+                return sorted;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Warp image using detected corners
+     */
+    public Bitmap warpToDocumentFromPoints(Bitmap bitmap, Point[] points) {
+        Mat src = new Mat();
+        Utils.bitmapToMat(bitmap, src);
+
+        Point[] sorted = sortCorners(points);
+        Point tl = sorted[0], tr = sorted[1], br = sorted[2], bl = sorted[3];
+
+        double widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+        double widthBottom = Math.hypot(br.x - bl.x, br.y - bl.y);
+        double maxWidth = Math.max(widthTop, widthBottom);
+
+        double heightLeft = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+        double heightRight = Math.hypot(br.x - tr.x, br.y - tr.y);
+        double maxHeight = Math.max(heightLeft, heightRight);
+
+        if (maxWidth < 1) maxWidth = 1;
+        if (maxHeight < 1) maxHeight = 1;
+
+        Mat srcPoints = new Mat(4, 1, CvType.CV_32FC2);
+        srcPoints.put(0, 0, tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y);
+
+        Mat dstPoints = new Mat(4, 1, CvType.CV_32FC2);
+        dstPoints.put(0, 0,
+                0.0, 0.0,
+                maxWidth - 1, 0.0,
+                maxWidth - 1, maxHeight - 1,
+                0.0, maxHeight - 1);
+
+        Mat warpMat = Imgproc.getPerspectiveTransform(srcPoints, dstPoints);
+        Mat dst = new Mat((int) maxHeight, (int) maxWidth, src.type());
+        Imgproc.warpPerspective(src, dst, warpMat, dst.size());
+
+        Bitmap output = Bitmap.createBitmap(dst.cols(), dst.rows(), Bitmap.Config.ARGB_8888);
+        Utils.matToBitmap(dst, output);
+        return output;
+    }
+
+    // --- Utility helpers ---
+
+    private Point[] sortCorners(Point[] pts) {
+        // Sort by Y first (top to bottom)
+        Arrays.sort(pts, Comparator.comparingDouble(p -> p.y));
+
+        // First two = top points, last two = bottom points
+        Point[] top = Arrays.copyOfRange(pts, 0, 2);
+        Point[] bottom = Arrays.copyOfRange(pts, 2, 4);
+
+        // Sort top-left vs top-right by X
+        if (top[0].x < top[1].x) {
+            // top[0] = TL, top[1] = TR
+        } else {
+            Point temp = top[0];
+            top[0] = top[1];
+            top[1] = temp;
+        }
+
+        // Sort bottom-left vs bottom-right by X
+        if (bottom[0].x < bottom[1].x) {
+            // bottom[0] = BL, bottom[1] = BR
+        } else {
+            Point temp = bottom[0];
+            bottom[0] = bottom[1];
+            bottom[1] = temp;
+        }
+
+        Point tl = top[0];
+        Point tr = top[1];
+        Point br = bottom[1];
+        Point bl = bottom[0];
+
+        return new Point[]{tl, tr, br, bl};
+    }
+
+    private double distance(Point p1, Point p2) {
+        return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    }
+
+    private Point[] smoothCorners(Point[] newCorners, Point[] lastCorners) {
+        Point[] smoothed = new Point[4];
+        for (int i = 0; i < 4; i++) {
+            double SMOOTH_ALPHA = 0.30;
+            double x = SMOOTH_ALPHA * newCorners[i].x + (1 - SMOOTH_ALPHA) * lastCorners[i].x;
+            double y = SMOOTH_ALPHA * newCorners[i].y + (1 - SMOOTH_ALPHA) * lastCorners[i].y;
+            smoothed[i] = new Point(x, y);
+        }
+        return smoothed;
+    }
+}

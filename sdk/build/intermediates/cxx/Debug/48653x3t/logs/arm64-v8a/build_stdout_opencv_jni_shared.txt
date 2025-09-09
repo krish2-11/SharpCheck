@@ -1,2 +1,2 @@
-ninja: Entering directory `C:\Users\DELL\AndroidStudioProjects\BlurDetectionApp\sdk\.cxx\Debug\48653x3t\arm64-v8a'
+ninja: Entering directory `D:\SharpCheck\sdk\.cxx\Debug\48653x3t\arm64-v8a'
 ninja: no work to do.
