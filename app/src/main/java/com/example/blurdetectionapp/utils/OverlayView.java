@@ -109,13 +109,4 @@ public class OverlayView extends View {
         }
     }
 
-    // Add a test method to verify overlay is working
-    public void drawTestPattern() {
-        PointF[] testPoints = new PointF[4];
-        testPoints[0] = new PointF(100f, 100f);
-        testPoints[1] = new PointF(300f, 100f);
-        testPoints[2] = new PointF(300f, 300f);
-        testPoints[3] = new PointF(100f, 300f);
-        setPoints(testPoints);
-    }
 }

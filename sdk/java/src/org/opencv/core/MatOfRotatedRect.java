@@ -3,10 +3,6 @@ package org.opencv.core;
 import java.util.Arrays;
 import java.util.List;
 
-import org.opencv.core.RotatedRect;
-
-
-
 public class MatOfRotatedRect extends Mat {
     // 32FC5
     private static final int _depth = CvType.CV_32F;

@@ -178,13 +178,18 @@ public class CameraManager {
             lastAnalysisTime = currentTime;
 
             Bitmap bitmap = imageProxyToBitmap(image);
+            if (bitmap != null) {
+                int rotation = image.getImageInfo().getRotationDegrees();
+                bitmap = rotateBitmap(bitmap, rotation); // rotate to upright
+            }
             image.close();
 
             if (bitmap == null) return;
 
             if (frameAnalyzerCallback != null) {
+                Bitmap finalBitmap = bitmap;
                 ContextCompat.getMainExecutor(context).execute(() -> {
-                    frameAnalyzerCallback.onFrameAnalyzed(bitmap);
+                    frameAnalyzerCallback.onFrameAnalyzed(finalBitmap);
                 });
             }
 

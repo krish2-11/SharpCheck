@@ -28,9 +28,12 @@ import com.example.blurdetectionapp.utils.BlurDetector;
 import com.example.blurdetectionapp.utils.DocumentDetection;
 import com.example.blurdetectionapp.utils.LightingAnalyzer;
 import com.example.blurdetectionapp.utils.OverlayView;
+import com.example.blurdetectionapp.utils.ShadowDetection;
 
 import org.opencv.android.OpenCVLoader;
 import org.opencv.core.Point;
+
+import java.util.Objects;
 
 @ExperimentalGetImage
 public class MainActivity extends AppCompatActivity implements
@@ -60,6 +63,12 @@ public class MainActivity extends AppCompatActivity implements
     // Current lighting analysis result
     private LightingAnalyzer.LightingAnalysisResult currentLightingResult;
     private BlurDetector.BlurDetectionResult currentBlurResult;
+
+    private final Handler cornerHandler = new Handler(Looper.getMainLooper());
+    private Runnable cornerRunnable;
+    private boolean isCornerDetectionActive = false;
+    private Bitmap latestFrame;
+
 
     // Captured image data
     private Bitmap capturedBitmap;
@@ -123,23 +132,53 @@ public class MainActivity extends AppCompatActivity implements
         cameraManager = new CameraManager(this, this);
         cameraManager.initializeCamera(previewView, this, this, this);
         cameraManager.setFrameAnalyzerCallback(this::processFrame);
+        startCornerDetectionLoop();
         Log.d(TAG, "Camera initialization started");
     }
 
     private void processFrame(Bitmap bitmap) {
-        if (bitmap == null) return;
-        Point[] corners = documentDetection.detectDocumentCornersPoints(bitmap);
-        if (corners != null) {
-            PointF[] mappedPoints = mapPointsToOverlay(corners, bitmap.getWidth(), bitmap.getHeight(), overlayView);
-            runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
-        } else {
-            runOnUiThread(() -> overlayView.clearCorners());
+        if (bitmap != null) {
+            latestFrame = bitmap.copy(Objects.requireNonNull(bitmap.getConfig()), false); // keep a copy
         }
+    }
+
+    private void startCornerDetectionLoop() {
+        isCornerDetectionActive = true;
+        cornerRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (latestFrame != null) {
+                    Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame);
+                    if (corners != null) {
+                        PointF[] mappedPoints = mapPointsToOverlay(
+                                corners,
+                                latestFrame.getWidth(),
+                                latestFrame.getHeight(),
+                                overlayView
+                        );
+
+                        runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
+                    } else {
+                        runOnUiThread(() -> overlayView.clearCorners());
+                    }
+//                    new Thread(() -> {
+//                        Bitmap shadowMask = ShadowDetection.detectShadows(latestFrame);
+//                        runOnUiThread(() -> overlayView.setShadowMask(shadowMask));
+//                    }).start();
+                }
+
+                if (isCornerDetectionActive) {
+                    cornerHandler.postDelayed(this, 2000); // repeat after 2 sec
+                }
+            }
+        };
+        cornerHandler.post(cornerRunnable);
     }
 
     private PointF[] mapPointsToOverlay(Point[] points, int imgWidth, int imgHeight, View overlayView) {
         int viewWidth = overlayView.getWidth();
         int viewHeight = overlayView.getHeight();
+
 
         if (viewWidth == 0 || viewHeight == 0) {
             PointF[] fallback = new PointF[4];
@@ -155,7 +194,7 @@ public class MainActivity extends AppCompatActivity implements
         // 🔹 FIT_CENTER → use the smaller scale
         float scale = Math.min(scaleX, scaleY);
 
-        // Add black borders (letterboxing/pillarboxing) padding
+        // Add black borders (letterboxing/pillar boxing) padding
         float dx = (viewWidth - imgWidth * scale) / 2f;
         float dy = (viewHeight - imgHeight * scale) / 2f;
 
@@ -166,8 +205,33 @@ public class MainActivity extends AppCompatActivity implements
                     (float) (points[i].y * scale + dy)
             );
         }
+        mapped = expandDocumentCorners(mapped , 1.3f);
         return mapped;
     }
+
+    private PointF[] expandDocumentCorners(PointF[] corners, float expansionFactor) {
+        // Compute center of the rectangle
+        float centerX = 0, centerY = 0;
+        for (PointF p : corners) {
+            centerX += p.x;
+            centerY += p.y;
+        }
+        centerX /= corners.length;
+        centerY /= corners.length;
+
+        // Move each point away from center by expansionFactor
+        PointF[] expanded = new PointF[corners.length];
+        for (int i = 0; i < corners.length; i++) {
+            float dx = corners[i].x - centerX;
+            float dy = corners[i].y - centerY;
+            expanded[i] = new PointF(
+                    centerX + dx * expansionFactor,
+                    centerY + dy * expansionFactor
+            );
+        }
+        return expanded;
+    }
+
 
     @SuppressLint("SetTextI18n")
     private void onCaptureClicked() {
@@ -362,10 +426,12 @@ public class MainActivity extends AppCompatActivity implements
 
     @Override
     protected void onDestroy() {
-        super.onDestroy();
-        if (cameraManager != null) {
-            cameraManager.shutdown();
-        }
+            super.onDestroy();
+            isCornerDetectionActive = false;
+            cornerHandler.removeCallbacks(cornerRunnable);
+            if (cameraManager != null) {
+                cameraManager.shutdown();
+            }
     }
 
     @Override
@@ -394,4 +460,5 @@ public class MainActivity extends AppCompatActivity implements
             );
         });
     }
+
 }
