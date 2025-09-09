@@ -1,41 +1,41 @@
 package com.example.blurdetectionapp.utils;
 
-import android.graphics.Bitmap;
 import android.util.Log;
 
-import org.opencv.android.Utils;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfDouble;
+import org.opencv.core.Rect;
 import org.opencv.imgproc.Imgproc;
+import org.opencv.core.Core;
 
 /**
- * Utility class for detecting blur in images using Laplacian variance method
- * Optimized for detecting subtle blur in real-world scenarios like partial defocus.
+ * Optimized Blur Detector for real-time document capture.
+ * Works directly with OpenCV Mat (no Bitmap overhead).
+ * Uses Laplacian variance + edge density checks.
  */
 public class BlurDetector {
 
     private static final String TAG = "BlurDetector";
 
-    // Different thresholds for different sensitivity levels
-    public static final double STRICT_BLUR_THRESHOLD = 600.0;    // More sensitive - catches subtle blur
-    public static final double MODERATE_BLUR_THRESHOLD = 800.0;  // Balanced approach
-    public static final double LENIENT_BLUR_THRESHOLD = 1200.0;  // Less sensitive - only obvious blur
+    // Thresholds
+    private static final double STRICT_BLUR_THRESHOLD = 600.0;   // catches subtle blur
+    private static final double EDGE_DENSITY_THRESHOLD = 0.02;   // % of edges required in frame
 
-    // Default threshold - recommended for your use case
-    private static final double DEFAULT_BLUR_THRESHOLD = STRICT_BLUR_THRESHOLD;
-
-    // Resize dimensions for faster processing
+    // Resize target for speed (keep aspect ratio)
     private static final int RESIZE_WIDTH = 320;
 
     public static class BlurDetectionResult {
         public final double laplacianVariance;
+        public final double edgeDensity;
         public final boolean isBlurred;
         public final String description;
-        public final double confidenceScore; // 0-100, higher = more confident it's sharp
+        public final double confidenceScore;
 
-        public BlurDetectionResult(double variance, boolean blurred, String desc, double confidence) {
+        public BlurDetectionResult(double variance, double edgeDensity,
+                                   boolean blurred, String desc, double confidence) {
             this.laplacianVariance = variance;
+            this.edgeDensity = edgeDensity;
             this.isBlurred = blurred;
             this.description = desc;
             this.confidenceScore = confidence;
@@ -43,137 +43,80 @@ public class BlurDetector {
     }
 
     /**
-     * Detect blur with default threshold (strict)
+     * Main blur detection method.
+     * @param mat Input image in Mat (preferably YUV->Mat converted before calling)
      */
-    public static BlurDetectionResult detectBlur(Bitmap bitmap) {
-        return detectBlur(bitmap, DEFAULT_BLUR_THRESHOLD);
-    }
-
-    /**
-     * Detect blur with custom threshold
-     *
-     * @param bitmap The image to analyze
-     * @param threshold Custom blur threshold
-     * @return BlurDetectionResult containing analysis results
-     */
-    public static BlurDetectionResult detectBlur(Bitmap bitmap, double threshold) {
-        if (bitmap == null) {
-            return new BlurDetectionResult(0, true, "No image provided", 0);
+    public static BlurDetectionResult detectBlur(Mat mat) {
+        if (mat == null || mat.empty()) {
+            return new BlurDetectionResult(0, 0, true, "No image", 0);
         }
 
-        Mat mat = null;
-        Mat gray = null;
-        Mat laplacian = null;
+        Mat resized = new Mat();
+        Mat gray = new Mat();
+        Mat laplacian = new Mat();
+        Mat edges = new Mat();
 
         try {
-            // Resize bitmap for faster processing
-            int originalWidth = bitmap.getWidth();
-            int originalHeight = bitmap.getHeight();
-            int resizedHeight = (int) ((float) RESIZE_WIDTH / originalWidth * originalHeight);
-            Bitmap resizedBitmap = Bitmap.createScaledBitmap(bitmap, RESIZE_WIDTH, resizedHeight, false);
+            // ✅ Resize for efficiency
+            double aspect = (double) mat.height() / mat.width();
+            int newHeight = (int) (RESIZE_WIDTH * aspect);
+            Imgproc.resize(mat, resized, new org.opencv.core.Size(RESIZE_WIDTH, newHeight));
 
-            // Convert Bitmap to Mat
-            mat = new Mat();
-            Utils.bitmapToMat(resizedBitmap, mat);
+            // ✅ Convert to grayscale
+            Imgproc.cvtColor(resized, gray, Imgproc.COLOR_RGBA2GRAY);
 
-            // Convert to Grayscale
-            gray = new Mat();
-            Imgproc.cvtColor(mat, gray, Imgproc.COLOR_RGBA2GRAY);
-
-            // Apply Laplacian operator
-            laplacian = new Mat();
+            // ✅ Laplacian variance (sharpness measure)
             Imgproc.Laplacian(gray, laplacian, CvType.CV_64F);
-
-            // Calculate variance of Laplacian
             MatOfDouble mean = new MatOfDouble();
             MatOfDouble stddev = new MatOfDouble();
-            org.opencv.core.Core.meanStdDev(laplacian, mean, stddev);
-
+            Core.meanStdDev(laplacian, mean, stddev);
             double variance = stddev.get(0, 0)[0];
-            variance = variance * variance; // variance = stddev^2
+            variance = variance * variance;
 
-            boolean isBlurred = variance < threshold;
+            // ✅ Edge density check (for occlusion cases like fingers)
+            Imgproc.Canny(gray, edges, 50, 150);
+            double edgePixels = Core.countNonZero(edges);
+            double totalPixels = gray.rows() * gray.cols();
+            double edgeDensity = edgePixels / totalPixels;
 
-            // Calculate confidence score (0-100)
-            double confidenceScore = Math.min(100, (variance / threshold) * 100);
+            // ✅ Multi-criteria decision
+            boolean isBlurred = variance < STRICT_BLUR_THRESHOLD || edgeDensity < EDGE_DENSITY_THRESHOLD;
 
-            String description = getBlurDescription(variance, threshold);
+            // ✅ Confidence (scaled by both variance + edge density)
+            double sharpnessScore = Math.min(1.0, variance / (STRICT_BLUR_THRESHOLD * 2));
+            double edgeScore = Math.min(1.0, edgeDensity / (EDGE_DENSITY_THRESHOLD * 2));
+            double confidence = (sharpnessScore * 0.6 + edgeScore * 0.4) * 100.0;
 
-            Log.d(TAG, String.format("Blur Analysis - Variance: %.1f, Threshold: %.1f, Blurred: %b, " +
-                            "Confidence: %.1f%%, Description: %s",
-                    variance, threshold, isBlurred, confidenceScore, description));
+            String desc = getDescription(variance, edgeDensity, isBlurred);
 
-            return new BlurDetectionResult(variance, isBlurred, description, confidenceScore);
+            Log.d(TAG, String.format("Blur Analysis - Variance: %.1f, EdgeDensity: %.3f, Blurred: %b, Confidence: %.1f%%, Desc: %s",
+                    variance, edgeDensity, isBlurred, confidence, desc));
 
-        } catch (Exception e) {
-            Log.e(TAG, "Error detecting blur", e);
-            return new BlurDetectionResult(0, true, "Analysis failed", 0);
+            return new BlurDetectionResult(variance, edgeDensity, isBlurred, desc, confidence);
+
         } finally {
-            // Release native memory
-            if (mat != null) mat.release();
-            if (gray != null) gray.release();
-            if (laplacian != null) laplacian.release();
+            resized.release();
+            gray.release();
+            laplacian.release();
+            edges.release();
         }
     }
 
-    /**
-     * Get descriptive blur assessment based on variance and threshold
-     */
-    private static String getBlurDescription(double variance, double threshold) {
-        double ratio = variance / threshold;
-
-        if (variance < threshold * 0.3) {
-            return "Severely Blurred";
-        } else if (variance < threshold * 0.6) {
-            return "Moderately Blurred";
-        } else if (variance < threshold) {
-            return "Slightly Blurred";
-        } else if (variance < threshold * 1.5) {
-            return "Acceptable Sharpness";
-        } else if (variance < threshold * 2.5) {
-            return "Sharp";
+    private static String getDescription(double variance, double edgeDensity, boolean blurred) {
+        if (blurred) {
+            if (edgeDensity < EDGE_DENSITY_THRESHOLD * 0.5) {
+                return "Too few details (possible obstruction)";
+            } else if (variance < STRICT_BLUR_THRESHOLD * 0.3) {
+                return "Severely blurred";
+            } else {
+                return "Blurred / low detail";
+            }
         } else {
-            return "Very Sharp";
+            if (variance > STRICT_BLUR_THRESHOLD * 2) {
+                return "Very sharp";
+            } else {
+                return "Acceptably sharp";
+            }
         }
-    }
-
-    /**
-     * Detect blur with different sensitivity levels
-     */
-    public static BlurDetectionResult detectBlurStrict(Bitmap bitmap) {
-        return detectBlur(bitmap, STRICT_BLUR_THRESHOLD);
-    }
-
-    public static BlurDetectionResult detectBlurModerate(Bitmap bitmap) {
-        return detectBlur(bitmap, MODERATE_BLUR_THRESHOLD);
-    }
-
-    public static BlurDetectionResult detectBlurLenient(Bitmap bitmap) {
-        return detectBlur(bitmap, LENIENT_BLUR_THRESHOLD);
-    }
-
-    /**
-     * Simple boolean check (backward compatibility)
-     */
-    public static boolean isImageBlurred(Bitmap bitmap) {
-        return detectBlur(bitmap).isBlurred;
-    }
-
-    /**
-     * Check if image has acceptable quality for your specific use case
-     * Considers both blur and confidence level
-     */
-    public static boolean isImageAcceptableForCapture(Bitmap bitmap) {
-        BlurDetectionResult result = detectBlurModerate(bitmap);
-        // Accept if not blurred OR if confidence is above 70%
-        return !result.isBlurred || result.confidenceScore > 70;
-    }
-
-    /**
-     * Get a quality assessment score (0-100) where higher is better
-     */
-    public static double getImageQualityScore(Bitmap bitmap) {
-        BlurDetectionResult result = detectBlur(bitmap);
-        return result.confidenceScore;
     }
 }
