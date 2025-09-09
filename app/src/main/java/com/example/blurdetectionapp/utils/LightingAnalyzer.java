@@ -1,5 +1,6 @@
 package com.example.blurdetectionapp.utils;
 
+import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
 import android.util.Log;
 
@@ -205,6 +206,7 @@ public class LightingAnalyzer {
         }
     }
 
+    @SuppressLint("DefaultLocale")
     private static String generateDetailMessage(double brightRatio, double laplacianVar, boolean hasReflection) {
         return String.format("Brightness: %.1f%% | Contrast: %.1f | Reflection: %s",
                 brightRatio * 100, laplacianVar, hasReflection ? "Yes" : "No");

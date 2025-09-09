@@ -1,20 +1,24 @@
 plugins {
-    alias(libs.plugins.android.application)
+    id 'com.android.application'
 }
 
 android {
     namespace 'com.example.blurdetectionapp'
+<<<<<<< HEAD
+    compileSdk 34
+=======
     compileSdk 36
 
     lint {
         checkReleaseBuilds false
         abortOnError false
     }
+>>>>>>> 5a468d325757a1d3bc02d2e58ee8c5da206ac3c0
 
     defaultConfig {
         applicationId "com.example.blurdetectionapp"
         minSdk 24
-        targetSdk 35
+        targetSdk 34
         versionCode 1
         versionName "1.0"
 
@@ -34,6 +38,14 @@ android {
 }
 
 dependencies {
+<<<<<<< HEAD
+    implementation libs.appcompat.v161
+    implementation libs.material.v1100
+    implementation libs.constraintlayout.v221
+    testImplementation libs.junit
+    androidTestImplementation libs.junit.v115
+    androidTestImplementation libs.espresso.core.v351
+=======
     implementation libs.appcompat
     implementation libs.material
     implementation libs.activity
@@ -71,5 +83,19 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+>>>>>>> 5a468d325757a1d3bc02d2e58ee8c5da206ac3c0
 
+    // CameraX
+    def camerax_version = "1.3.0"
+    implementation libs.androidx.camera.core
+    implementation libs.androidx.camera.camera2
+    implementation libs.camera.lifecycle
+    implementation libs.camera.view
+
+
+    implementation libs.cardview
+
+
+    // OpenCV
+    implementation libs.opencv
 }
