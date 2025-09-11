@@ -14,7 +14,6 @@ import androidx.annotation.NonNull;
 import androidx.camera.core.AspectRatio;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
-import androidx.camera.core.ExperimentalGetImage;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
@@ -49,9 +48,7 @@ public class CameraManager {
 
     private ProcessCameraProvider cameraProvider;
     private Camera camera;
-    private Preview preview;
     private ImageCapture imageCapture;
-    private ImageAnalysis imageAnalysis;
 
     // Callbacks
     private LightingAnalysisCallback lightingCallback;
@@ -66,9 +63,6 @@ public class CameraManager {
         void onBlurAnalyzed(BlurDetector.BlurDetectionResult result);
     }
     private BlurAnalysisCallback blurCallback;
-    public void setBlurAnalysisCallback(BlurAnalysisCallback callback) {
-        this.blurCallback = callback;
-    }
 
     public interface ImageCaptureCallback {
         void onImageCaptured(Bitmap bitmap);
@@ -110,7 +104,7 @@ public class CameraManager {
      */
     private void startCamera(PreviewView previewView) {
         // Preview use case
-        preview = new Preview.Builder()
+        Preview preview = new Preview.Builder()
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .build();
 
@@ -132,7 +126,7 @@ public class CameraManager {
 //        imageAnalysis.setAnalyzer(cameraExecutor, new LightingImageAnalyzer());
 
         // Image analysis use case for live lighting detection and blur detection
-        imageAnalysis = new ImageAnalysis.Builder()
+        ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                 .setTargetResolution(new Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
@@ -188,26 +182,20 @@ public class CameraManager {
 
             if (frameAnalyzerCallback != null) {
                 Bitmap finalBitmap = bitmap;
-                ContextCompat.getMainExecutor(context).execute(() -> {
-                    frameAnalyzerCallback.onFrameAnalyzed(finalBitmap);
-                });
+                ContextCompat.getMainExecutor(context).execute(() -> frameAnalyzerCallback.onFrameAnalyzed(finalBitmap));
             }
 
             // Lighting analysis
             if (lightingCallback != null) {
                 LightingAnalyzer.LightingAnalysisResult lightingResult =
                         LightingAnalyzer.analyzeLighting(bitmap);
-                ContextCompat.getMainExecutor(context).execute(() -> {
-                    lightingCallback.onLightingAnalyzed(lightingResult);
-                });
+                ContextCompat.getMainExecutor(context).execute(() -> lightingCallback.onLightingAnalyzed(lightingResult));
             }
 
             // Blur analysis
             if (blurCallback != null) {
                 BlurDetector.BlurDetectionResult blurResult = BlurDetector.detectBlur(bitmap);
-                ContextCompat.getMainExecutor(context).execute(() -> {
-                    blurCallback.onBlurAnalyzed(blurResult);
-                });
+                ContextCompat.getMainExecutor(context).execute(() -> blurCallback.onBlurAnalyzed(blurResult));
             }
         }
     }
@@ -382,9 +370,7 @@ public class CameraManager {
                             LightingAnalyzer.analyzeLighting(bitmap);
 
                     // Post result to main thread
-                    ContextCompat.getMainExecutor(context).execute(() -> {
-                        lightingCallback.onLightingAnalyzed(result);
-                    });
+                    ContextCompat.getMainExecutor(context).execute(() -> lightingCallback.onLightingAnalyzed(result));
                 }
 
                 if(bitmap != null && frameAnalyzerCallback != null){

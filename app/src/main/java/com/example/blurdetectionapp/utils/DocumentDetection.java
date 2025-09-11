@@ -12,38 +12,32 @@ import java.util.*;
 public class DocumentDetection {
 
     private static final String TAG = "DocumentDetection";
-
     private Point[] lastCorners = null;
 
     /**
      * Detects document corners and returns them as Point[]
+     * Works on any background
      */
     public Point[] detectDocumentCornersPoints(Bitmap bitmap) {
         Mat mat = new Mat();
         Utils.bitmapToMat(bitmap, mat);
 
-        // Convert to grayscale
+        // 1️⃣ Convert to grayscale
         Mat grayMat = new Mat();
         Imgproc.cvtColor(mat, grayMat, Imgproc.COLOR_RGBA2GRAY);
 
-        // Gaussian blur
+        // 2️⃣ Gaussian blur to reduce noise
         Imgproc.GaussianBlur(grayMat, grayMat, new Size(5, 5), 0);
 
-        // Adaptive threshold (better for uneven lighting)
-        Mat binMat = new Mat();
-        Imgproc.adaptiveThreshold(grayMat, binMat, 255,
-                Imgproc.ADAPTIVE_THRESH_MEAN_C,
-                Imgproc.THRESH_BINARY_INV, 13, 5);
-
-        // Canny edge detection
+        // 3️⃣ Canny edge detection
         Mat edges = new Mat();
-        Imgproc.Canny(binMat, edges, 80, 200);
+        Imgproc.Canny(grayMat, edges, 50, 150); // Adjust thresholds if needed
 
-        // Morphological close
+        // 4️⃣ Morphological close to connect edges
         Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
         Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel);
 
-        // Find contours
+        // 5️⃣ Find contours
         List<MatOfPoint> contours = new ArrayList<>();
         Mat hierarchy = new Mat();
         Imgproc.findContours(edges, contours, hierarchy,
@@ -51,18 +45,18 @@ public class DocumentDetection {
 
         Log.d(TAG, "Total contours found: " + contours.size());
 
-        // Sort by area
-        contours.sort((c1, c2) ->
-                Double.compare(Imgproc.contourArea(c2), Imgproc.contourArea(c1)));
+        // 6️⃣ Sort contours by area (largest first)
+        contours.sort((c1, c2) -> Double.compare(Imgproc.contourArea(c2), Imgproc.contourArea(c1)));
 
         int imgArea = mat.cols() * mat.rows();
-        double minArea = imgArea * 0.1;
+        double minArea = imgArea * 0.1; // Ignore small contours
 
-        // Find largest quadrilateral
         MatOfPoint2f approxCurve = new MatOfPoint2f();
         for (MatOfPoint contour : contours) {
             double area = Imgproc.contourArea(contour);
             if (area < minArea) continue;
+
+            // Approximate polygon
             double peri = Imgproc.arcLength(new MatOfPoint2f(contour.toArray()), true);
             Imgproc.approxPolyDP(new MatOfPoint2f(contour.toArray()), approxCurve,
                     0.02 * peri, true);
@@ -71,7 +65,7 @@ public class DocumentDetection {
                 Point[] corners = approxCurve.toArray();
                 Point[] sorted = sortCorners(corners);
 
-                // Optional smoothing
+                // Smooth corners over time
                 if (lastCorners != null && lastCorners.length == 4) {
                     double dist = 0;
                     for (int i = 0; i < 4; i++) {
@@ -134,37 +128,14 @@ public class DocumentDetection {
     // --- Utility helpers ---
 
     private Point[] sortCorners(Point[] pts) {
-        // Sort by Y first (top to bottom)
-        Arrays.sort(pts, Comparator.comparingDouble(p -> p.y));
-
-        // First two = top points, last two = bottom points
+        Arrays.sort(pts, Comparator.comparingDouble(p -> p.y)); // top->bottom
         Point[] top = Arrays.copyOfRange(pts, 0, 2);
         Point[] bottom = Arrays.copyOfRange(pts, 2, 4);
 
-        // Sort top-left vs top-right by X
-        if (top[0].x < top[1].x) {
-            // top[0] = TL, top[1] = TR
-        } else {
-            Point temp = top[0];
-            top[0] = top[1];
-            top[1] = temp;
-        }
+        if (top[0].x > top[1].x) { Point temp = top[0]; top[0] = top[1]; top[1] = temp; }
+        if (bottom[0].x > bottom[1].x) { Point temp = bottom[0]; bottom[0] = bottom[1]; bottom[1] = temp; }
 
-        // Sort bottom-left vs bottom-right by X
-        if (bottom[0].x < bottom[1].x) {
-            // bottom[0] = BL, bottom[1] = BR
-        } else {
-            Point temp = bottom[0];
-            bottom[0] = bottom[1];
-            bottom[1] = temp;
-        }
-
-        Point tl = top[0];
-        Point tr = top[1];
-        Point br = bottom[1];
-        Point bl = bottom[0];
-
-        return new Point[]{tl, tr, br, bl};
+        return new Point[]{top[0], top[1], bottom[1], bottom[0]};
     }
 
     private double distance(Point p1, Point p2) {

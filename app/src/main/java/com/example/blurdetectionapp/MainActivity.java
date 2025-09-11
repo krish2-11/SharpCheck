@@ -31,8 +31,13 @@ import com.example.blurdetectionapp.utils.OverlayView;
 import com.example.blurdetectionapp.utils.ShadowDetection;
 
 import org.opencv.android.OpenCVLoader;
+import org.opencv.core.Mat;
 import org.opencv.core.Point;
+import org.opencv.imgcodecs.Imgcodecs;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.Objects;
 
 @ExperimentalGetImage
@@ -68,7 +73,6 @@ public class MainActivity extends AppCompatActivity implements
     private Runnable cornerRunnable;
     private boolean isCornerDetectionActive = false;
     private Bitmap latestFrame;
-
 
     // Captured image data
     private Bitmap capturedBitmap;
@@ -148,7 +152,8 @@ public class MainActivity extends AppCompatActivity implements
             @Override
             public void run() {
                 if (latestFrame != null) {
-                    Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame);
+                    Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame
+                    );
                     if (corners != null) {
                         PointF[] mappedPoints = mapPointsToOverlay(
                                 corners,
@@ -231,7 +236,6 @@ public class MainActivity extends AppCompatActivity implements
         }
         return expanded;
     }
-
 
     @SuppressLint("SetTextI18n")
     private void onCaptureClicked() {
@@ -327,16 +331,28 @@ public class MainActivity extends AppCompatActivity implements
             String blurStatus = "Image is " + blurResult.description;
             resultText.setText(blurStatus);
 
-            // Detect document corners
-            //Point[] corners
-            Point[] corners = documentDetection.detectDocumentCornersPoints(bitmap);
+            File photoFile = new File(getExternalFilesDir(null),
+                    "document_" + System.currentTimeMillis() + ".jpg");
+            try (FileOutputStream out = new FileOutputStream(photoFile)) {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out);
+            } catch (IOException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "Error saving image", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // ✅ Detect document corners on full-res image
+            Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame);
             if (corners != null) {
-                // Warp the document from detected corners
-                Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, corners);
+                // Warp the document
+                Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(latestFrame, corners);
+
                 // Show cropped document in imageView2
                 imageView2.setImageBitmap(warpedBitmap);
+
             } else {
                 Toast.makeText(this, "No document detected", Toast.LENGTH_SHORT).show();
+                imageView2.setImageResource(R.drawable.no_document);
             }
 
             // Show results panel
