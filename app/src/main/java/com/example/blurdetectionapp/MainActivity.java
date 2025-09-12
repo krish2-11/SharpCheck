@@ -298,8 +298,9 @@ public class MainActivity extends AppCompatActivity implements
         currentBlurResult = result;
         mainHandler.post(() -> {
             @SuppressLint("DefaultLocale")
-            String blurMessage = String.format("Blur: %s (Var: %.1f, EdgeDensity: %.3f)",
-                    result.description, result.laplacianVariance, result.edgeDensity);
+            String blurMessage = String.format("Blur: %b, Occluded: %b, AvgVariance: %.1f, BlurPct: %.3f, OcclusionPct: %.3f)",
+                    result.isBlurred, result.isOccluded,  result.avgVariance, result.blurPercentage, result.occlusionPercentage);
+
             blurStatusText.setText(blurMessage);
 
             boolean canCapture = (currentLightingResult != null && currentLightingResult.isCaptureEnabled)

@@ -185,7 +185,7 @@ public class CameraManager {
                 Mat blurMat = mat.clone();
                 cameraExecutor.execute(() -> {
                     BlurDetector.BlurDetectionResult result =
-                            BlurDetector.detectBlur(blurMat);
+                            BlurDetector.detectBlurAndOcclusion(blurMat);
                     blurMat.release();
                     ContextCompat.getMainExecutor(context).execute(() ->
                             blurCallback.onBlurAnalyzed(result)
