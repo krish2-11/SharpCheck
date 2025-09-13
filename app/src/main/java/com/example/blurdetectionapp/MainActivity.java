@@ -4,7 +4,11 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.graphics.PointF;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -31,13 +35,7 @@ import com.example.blurdetectionapp.utils.OverlayView;
 import com.example.blurdetectionapp.utils.ShadowDetection;
 
 import org.opencv.android.OpenCVLoader;
-import org.opencv.core.Mat;
 import org.opencv.core.Point;
-import org.opencv.imgcodecs.Imgcodecs;
-
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
 import java.util.Objects;
 
 @ExperimentalGetImage
@@ -76,6 +74,8 @@ public class MainActivity extends AppCompatActivity implements
 
     // Captured image data
     private Bitmap capturedBitmap;
+
+    private TextView modeRectangle, modeSquare, modeCard;
 
     static {
         if (!OpenCVLoader.initDebug()) {
@@ -119,6 +119,20 @@ public class MainActivity extends AppCompatActivity implements
         imageView2 = findViewById(R.id.imageView2);
         resultText = findViewById(R.id.resultText);
 
+        modeRectangle=findViewById(R.id.modeRectangle);
+        modeSquare=findViewById(R.id.modeSquare);
+        modeCard=findViewById(R.id.modeCard);
+
+        View.OnClickListener modeClickListener = v -> {
+            String mode = ((TextView)v).getText().toString();
+            onModeChanged(mode);
+            highlightSelected((TextView)v);
+        };
+
+        modeSquare.setOnClickListener(modeClickListener);
+        modeRectangle.setOnClickListener(modeClickListener);
+        modeCard.setOnClickListener(modeClickListener);
+
         overlayView = findViewById(R.id.overlayView);
 
         // Set click listeners
@@ -126,10 +140,56 @@ public class MainActivity extends AppCompatActivity implements
         toggleResultsButton.setOnClickListener(v -> toggleResultsView());
         backToCameraButton.setOnClickListener(v -> backToCameraView());
 
+        captureButton.setEnabled(false);
+
         documentDetection = new DocumentDetection();
 
         // Initially disable capture button until lighting analysis is done
         updateCaptureButtonState(false);
+    }
+
+    private void onModeChanged(String mode) {
+        // 👉 Your custom logic when mode changes
+        // Example:
+        int resId = 0;
+        switch (mode) {
+            case "A4":
+                resId=R.drawable.rectangle_box;
+                break;
+            case "Square":
+                resId=R.drawable.square_box;
+                break;
+            case "Card":
+                resId=R.drawable.card_box;
+                break;
+        }
+        if (resId != 0) {
+            Bitmap bitmap = BitmapFactory.decodeResource(getResources(), resId);
+            OverlayView.OverlayType type = null;
+            if(resId == R.drawable.rectangle_box){
+                type = OverlayView.OverlayType.PORTRAIT;
+            }
+            else if(resId == R.drawable.square_box){
+                type = OverlayView.OverlayType.SQUARE;
+            }
+            else{
+                type = OverlayView.OverlayType.LANDSCAPE;
+            }
+            overlayView.setOverlay(bitmap , type);
+        } else {
+            overlayView.setOverlay(null , null); // clear overlay
+        }
+        Toast.makeText(this, "Mode: " + mode, Toast.LENGTH_SHORT).show();
+    }
+
+    private void highlightSelected(TextView selected) {
+        // Reset all
+        modeCard.setTextColor(Color.WHITE);
+        modeRectangle.setTextColor(Color.WHITE);
+        modeSquare.setTextColor(Color.WHITE);
+
+        // Highlight current
+        selected.setTextColor(Color.YELLOW);
     }
 
     private void initializeCamera() {
@@ -173,7 +233,7 @@ public class MainActivity extends AppCompatActivity implements
                 }
 
                 if (isCornerDetectionActive) {
-                    cornerHandler.postDelayed(this, 2000); // repeat after 2 sec
+                    cornerHandler.postDelayed(this, 1000); // repeat after 1 sec
                 }
             }
         };
@@ -331,29 +391,31 @@ public class MainActivity extends AppCompatActivity implements
             String blurStatus = "Image is " + blurResult.description;
             resultText.setText(blurStatus);
 
-            File photoFile = new File(getExternalFilesDir(null),
-                    "document_" + System.currentTimeMillis() + ".jpg");
-            try (FileOutputStream out = new FileOutputStream(photoFile)) {
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out);
-            } catch (IOException e) {
-                e.printStackTrace();
-                Toast.makeText(this, "Error saving image", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
             // ✅ Detect document corners on full-res image
-            Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame);
-            if (corners != null) {
-                // Warp the document
-                Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(latestFrame, corners);
+            RectF roi = overlayView.getOverlayRect();
+            if (roi != null && latestFrame != null) {
+                // scale ROI from view coordinates back to camera-bitmap coordinates
+                Rect scaledRoi = scaleRectToBitmap(roi, latestFrame.getWidth(), latestFrame.getHeight(),
+                        overlayView.getWidth(), overlayView.getHeight());
+                Bitmap cropped = Bitmap.createBitmap(
+                        latestFrame,
+                        scaledRoi.left, scaledRoi.top,
+                        scaledRoi.width(), scaledRoi.height()
+                );
+                Point[] corners = documentDetection.detectDocumentCornersPoints(cropped);
+                if (corners != null) {
+                    // Warp the document
+                    Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(latestFrame, corners);
 
-                // Show cropped document in imageView2
-                imageView2.setImageBitmap(warpedBitmap);
+                    // Show cropped document in imageView2
+                    imageView2.setImageBitmap(warpedBitmap);
 
-            } else {
-                Toast.makeText(this, "No document detected", Toast.LENGTH_SHORT).show();
-                imageView2.setImageResource(R.drawable.no_document);
+                } else {
+                    Toast.makeText(this, "No document detected", Toast.LENGTH_SHORT).show();
+                    imageView2.setImageResource(R.drawable.no_document);
+                }
             }
+
 
             // Show results panel
             showResultsView();
@@ -366,6 +428,34 @@ public class MainActivity extends AppCompatActivity implements
                 updateCaptureButtonState(false);
             }
         });
+    }
+
+    private Rect scaleRectToBitmap(RectF rectInView,
+                                   int bmpW, int bmpH,
+                                   int viewW, int viewH) {
+
+        float scaleX = (float) viewW / bmpW;
+        float scaleY = (float) viewH / bmpH;
+        // FIT_CENTER ⇒ use the smaller scale
+        float scale = Math.min(scaleX, scaleY);
+
+        // padding due to letter-boxing
+        float dx = (viewW - bmpW * scale) / 2f;
+        float dy = (viewH - bmpH * scale) / 2f;
+
+        // convert rect from view space → bitmap space
+        int left   = Math.round((rectInView.left   - dx) / scale);
+        int top    = Math.round((rectInView.top    - dy) / scale);
+        int right  = Math.round((rectInView.right  - dx) / scale);
+        int bottom = Math.round((rectInView.bottom - dy) / scale);
+
+        // clamp to bitmap bounds
+        left   = Math.max(0, Math.min(left,   bmpW - 1));
+        top    = Math.max(0, Math.min(top,    bmpH - 1));
+        right  = Math.max(0, Math.min(right,  bmpW));
+        bottom = Math.max(0, Math.min(bottom, bmpH));
+
+        return new Rect(left, top, right, bottom);
     }
 
     @Override

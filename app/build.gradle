@@ -55,6 +55,8 @@ dependencies {
     implementation libs.androidx.camera.video
     implementation libs.camera.view
     implementation libs.androidx.camera.extensions
+    implementation libs.material.vlatestversion
+
 
     // Lifecycle components
     implementation libs.androidx.lifecycle.runtime.ktx
