@@ -35,12 +35,17 @@ import com.example.blurdetectionapp.utils.OverlayView;
 import com.example.blurdetectionapp.utils.ShadowDetection;
 
 import org.opencv.android.OpenCVLoader;
+import org.opencv.core.Mat;
 import org.opencv.core.Point;
+
 import java.util.Objects;
 
 @ExperimentalGetImage
 public class MainActivity extends AppCompatActivity implements
-        CameraManager.LightingAnalysisCallback, CameraManager.ImageCaptureCallback, CameraManager.BlurAnalysisCallback {
+        CameraManager.LightingAnalysisCallback,
+        CameraManager.ImageCaptureCallback,
+        CameraManager.BlurAnalysisCallback {
+
     private static final String TAG = "MainActivity";
     private static final int CAMERA_PERMISSION_CODE = 200;
 
@@ -48,6 +53,7 @@ public class MainActivity extends AppCompatActivity implements
     private PreviewView previewView;
     private TextView lightingStatusText;
     private TextView lightingDetailText;
+    private TextView blurStatusText;
     private Button captureButton;
     private Button toggleResultsButton;
     private ImageView imageView;
@@ -55,27 +61,25 @@ public class MainActivity extends AppCompatActivity implements
     private TextView resultText;
     private View resultsPanel;
     private OverlayView overlayView;
-    private DocumentDetection documentDetection;
 
-    private TextView blurStatusText;
+    private DocumentDetection documentDetection;
 
     // Camera and Analysis
     private CameraManager cameraManager;
     private Handler mainHandler;
 
-    // Current lighting analysis result
+    // Current analysis results
     private LightingAnalyzer.LightingAnalysisResult currentLightingResult;
     private BlurDetector.BlurDetectionResult currentBlurResult;
 
+    // Document detection loop
     private final Handler cornerHandler = new Handler(Looper.getMainLooper());
     private Runnable cornerRunnable;
     private boolean isCornerDetectionActive = false;
     private Bitmap latestFrame;
 
-    // Captured image data
+    // Captured image
     private Bitmap capturedBitmap;
-
-    private TextView modeRectangle, modeSquare, modeCard;
 
     static {
         if (!OpenCVLoader.initDebug()) {
@@ -93,7 +97,7 @@ public class MainActivity extends AppCompatActivity implements
         initializeViews();
         mainHandler = new Handler(Looper.getMainLooper());
 
-        // Check camera permission and initialize
+        // Check camera permission
         if (hasCameraPermission()) {
             initializeCamera();
         } else {
@@ -102,94 +106,29 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     private void initializeViews() {
-        // Camera views
         previewView = findViewById(R.id.previewView);
         lightingStatusText = findViewById(R.id.lightingStatusText);
         lightingDetailText = findViewById(R.id.lightingDetailText);
         blurStatusText = findViewById(R.id.BlurStatusText);
 
-        // Control buttons
         captureButton = findViewById(R.id.captureButton);
         toggleResultsButton = findViewById(R.id.toggleResultsButton);
         Button backToCameraButton = findViewById(R.id.backToCameraButton);
 
-        // Result views
         resultsPanel = findViewById(R.id.resultsPanel);
         imageView = findViewById(R.id.imageView);
         imageView2 = findViewById(R.id.imageView2);
         resultText = findViewById(R.id.resultText);
 
-        modeRectangle=findViewById(R.id.modeRectangle);
-        modeSquare=findViewById(R.id.modeSquare);
-        modeCard=findViewById(R.id.modeCard);
-
-        View.OnClickListener modeClickListener = v -> {
-            String mode = ((TextView)v).getText().toString();
-            onModeChanged(mode);
-            highlightSelected((TextView)v);
-        };
-
-        modeSquare.setOnClickListener(modeClickListener);
-        modeRectangle.setOnClickListener(modeClickListener);
-        modeCard.setOnClickListener(modeClickListener);
-
         overlayView = findViewById(R.id.overlayView);
 
-        // Set click listeners
         captureButton.setOnClickListener(v -> onCaptureClicked());
         toggleResultsButton.setOnClickListener(v -> toggleResultsView());
         backToCameraButton.setOnClickListener(v -> backToCameraView());
 
-        captureButton.setEnabled(false);
-
         documentDetection = new DocumentDetection();
 
-        // Initially disable capture button until lighting analysis is done
         updateCaptureButtonState(false);
-    }
-
-    private void onModeChanged(String mode) {
-        // 👉 Your custom logic when mode changes
-        // Example:
-        int resId = 0;
-        switch (mode) {
-            case "A4":
-                resId=R.drawable.rectangle_box;
-                break;
-            case "Square":
-                resId=R.drawable.square_box;
-                break;
-            case "Card":
-                resId=R.drawable.card_box;
-                break;
-        }
-        if (resId != 0) {
-            Bitmap bitmap = BitmapFactory.decodeResource(getResources(), resId);
-            OverlayView.OverlayType type = null;
-            if(resId == R.drawable.rectangle_box){
-                type = OverlayView.OverlayType.PORTRAIT;
-            }
-            else if(resId == R.drawable.square_box){
-                type = OverlayView.OverlayType.SQUARE;
-            }
-            else{
-                type = OverlayView.OverlayType.LANDSCAPE;
-            }
-            overlayView.setOverlay(bitmap , type);
-        } else {
-            overlayView.setOverlay(null , null); // clear overlay
-        }
-        Toast.makeText(this, "Mode: " + mode, Toast.LENGTH_SHORT).show();
-    }
-
-    private void highlightSelected(TextView selected) {
-        // Reset all
-        modeCard.setTextColor(Color.WHITE);
-        modeRectangle.setTextColor(Color.WHITE);
-        modeSquare.setTextColor(Color.WHITE);
-
-        // Highlight current
-        selected.setTextColor(Color.YELLOW);
     }
 
     private void initializeCamera() {
@@ -197,12 +136,12 @@ public class MainActivity extends AppCompatActivity implements
         cameraManager.initializeCamera(previewView, this, this, this);
         cameraManager.setFrameAnalyzerCallback(this::processFrame);
         startCornerDetectionLoop();
-        Log.d(TAG, "Camera initialization started");
+        Log.d(TAG, "Camera initialized");
     }
 
     private void processFrame(Bitmap bitmap) {
         if (bitmap != null) {
-            latestFrame = bitmap.copy(Objects.requireNonNull(bitmap.getConfig()), false); // keep a copy
+            latestFrame = bitmap.copy(Objects.requireNonNull(bitmap.getConfig()), false);
         }
     }
 
@@ -212,8 +151,7 @@ public class MainActivity extends AppCompatActivity implements
             @Override
             public void run() {
                 if (latestFrame != null) {
-                    Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame
-                    );
+                    Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame);
                     if (corners != null) {
                         PointF[] mappedPoints = mapPointsToOverlay(
                                 corners,
@@ -233,7 +171,7 @@ public class MainActivity extends AppCompatActivity implements
                 }
 
                 if (isCornerDetectionActive) {
-                    cornerHandler.postDelayed(this, 1000); // repeat after 1 sec
+                    cornerHandler.postDelayed(this, 2000); // every 2s
                 }
             }
         };
@@ -243,7 +181,6 @@ public class MainActivity extends AppCompatActivity implements
     private PointF[] mapPointsToOverlay(Point[] points, int imgWidth, int imgHeight, View overlayView) {
         int viewWidth = overlayView.getWidth();
         int viewHeight = overlayView.getHeight();
-
 
         if (viewWidth == 0 || viewHeight == 0) {
             PointF[] fallback = new PointF[4];
@@ -255,11 +192,8 @@ public class MainActivity extends AppCompatActivity implements
 
         float scaleX = (float) viewWidth / imgWidth;
         float scaleY = (float) viewHeight / imgHeight;
-
-        // 🔹 FIT_CENTER → use the smaller scale
         float scale = Math.min(scaleX, scaleY);
 
-        // Add black borders (letterboxing/pillar boxing) padding
         float dx = (viewWidth - imgWidth * scale) / 2f;
         float dy = (viewHeight - imgHeight * scale) / 2f;
 
@@ -270,12 +204,10 @@ public class MainActivity extends AppCompatActivity implements
                     (float) (points[i].y * scale + dy)
             );
         }
-        mapped = expandDocumentCorners(mapped , 1.3f);
-        return mapped;
+        return expandDocumentCorners(mapped, 1.3f);
     }
 
     private PointF[] expandDocumentCorners(PointF[] corners, float expansionFactor) {
-        // Compute center of the rectangle
         float centerX = 0, centerY = 0;
         for (PointF p : corners) {
             centerX += p.x;
@@ -284,7 +216,6 @@ public class MainActivity extends AppCompatActivity implements
         centerX /= corners.length;
         centerY /= corners.length;
 
-        // Move each point away from center by expansionFactor
         PointF[] expanded = new PointF[corners.length];
         for (int i = 0; i < corners.length; i++) {
             float dx = corners[i].x - centerX;
@@ -305,7 +236,6 @@ public class MainActivity extends AppCompatActivity implements
         }
 
         if (currentLightingResult.lightingCondition == LightingAnalyzer.LightingCondition.BAD) {
-            // Show dialog explaining why capture is disabled
             showLightingIssueDialog();
             return;
         }
@@ -322,13 +252,12 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
-    @SuppressLint("SetTextI18n")
     private void showLightingIssueDialog() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Image Quality Issue")
-                .setMessage("Cannot capture image due to lighting conditions:\n\n" +
+                .setMessage("Cannot capture image due to lighting:\n\n" +
                         generateLightingIssueExplanation(currentLightingResult) +
-                        "\n\nPlease adjust lighting or camera position for better image quality.")
+                        "\n\nPlease adjust lighting or camera position.")
                 .setPositiveButton("OK", (dialog, which) -> dialog.dismiss())
                 .setNegativeButton("Capture Anyway", (dialog, which) -> {
                     if (cameraManager != null) {
@@ -341,19 +270,16 @@ public class MainActivity extends AppCompatActivity implements
                 .show();
     }
 
-    // CameraManager.LightingAnalysisCallback implementation
     @Override
     public void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result) {
+        currentLightingResult = result;
         mainHandler.post(() -> {
-            currentLightingResult = result;
-
-            // Update UI
             lightingStatusText.setText(result.statusMessage);
             lightingDetailText.setText(result.detailMessage);
 
-            // Update capture button state based on new LightingAnalyzer result
-            updateCaptureButtonState(result.isCaptureEnabled
-            );
+            boolean canCapture = result.isCaptureEnabled
+                    && (currentBlurResult == null || !currentBlurResult.isBlurred);
+            updateCaptureButtonState(canCapture);
         });
     }
 
@@ -364,32 +290,40 @@ public class MainActivity extends AppCompatActivity implements
             explanation.append("• Reflection detected on document surface\n");
         }
         if (result.brightPixelRatio >= 0.55) {
-            explanation.append("• Excessive brightness: Image may be overexposed\n");
+            explanation.append("• Excessive brightness: possible overexposure\n");
         }
-        if (result.laplacianVariance <= 900) {
-            explanation.append("• Low contrast: Insufficient detail and edge definition\n");
-        }
+//        if (result.laplacianVariance <= 900) {
+//            explanation.append("• Low contrast: insufficient detail\n");
+//        }
 
         if (explanation.length() == 0) {
-            explanation.append("Multiple lighting quality indicators are suboptimal");
+            explanation.append("Multiple lighting issues detected");
         }
-
         return explanation.toString();
     }
 
-    // CameraManager.ImageCaptureCallback implementation
+    @Override
+    public void onBlurAnalyzed(BlurDetector.BlurDetectionResult result) {
+        currentBlurResult = result;
+        mainHandler.post(() -> {
+            @SuppressLint("DefaultLocale")
+            String blurMessage = String.format("Blur: %b, Occluded: %b, AvgVariance: %.1f, BlurPct: %.3f, OcclusionPct: %.3f)",
+                    result.isBlurred, result.isOccluded,  result.avgVariance, result.blurPercentage, result.occlusionPercentage);
+
+            blurStatusText.setText(blurMessage);
+
+            boolean canCapture = (currentLightingResult != null && currentLightingResult.isCaptureEnabled)
+                    && !result.isBlurred;
+            updateCaptureButtonState(canCapture);
+        });
+    }
+
     @Override
     public void onImageCaptured(Bitmap bitmap) {
         capturedBitmap = bitmap;
 
         mainHandler.post(() -> {
-            // Show captured image
             imageView.setImageBitmap(bitmap);
-
-            // Perform blur detection
-            BlurDetector.BlurDetectionResult blurResult = BlurDetector.detectBlur(bitmap);
-            String blurStatus = "Image is " + blurResult.description;
-            resultText.setText(blurStatus);
 
             // ✅ Detect document corners on full-res image
             RectF roi = overlayView.getOverlayRect();
@@ -416,14 +350,10 @@ public class MainActivity extends AppCompatActivity implements
                 }
             }
 
-
-            // Show results panel
             showResultsView();
 
-            // Re-enable capture button based on current lighting condition
             if (currentLightingResult != null) {
-                updateCaptureButtonState(currentLightingResult.isCaptureEnabled
-                );
+                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
             } else {
                 updateCaptureButtonState(false);
             }
@@ -463,8 +393,7 @@ public class MainActivity extends AppCompatActivity implements
         mainHandler.post(() -> {
             Toast.makeText(this, "Capture failed: " + error, Toast.LENGTH_SHORT).show();
             if (currentLightingResult != null) {
-                updateCaptureButtonState(currentLightingResult.isCaptureEnabled
-                );
+                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
             } else {
                 updateCaptureButtonState(false);
             }
@@ -475,9 +404,6 @@ public class MainActivity extends AppCompatActivity implements
     private void updateCaptureButtonState(boolean enabled) {
         captureButton.setEnabled(enabled);
         captureButton.setText("CAPTURE");
-
-        // Optionally update lighting detail text with status message if needed
-        // lightingDetailText.setText(statusMessage);
     }
 
     private void toggleResultsView() {
@@ -488,7 +414,6 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
-    @SuppressLint("SetTextI18n")
     private void showResultsView() {
         previewView.setVisibility(View.GONE);
         resultsPanel.setVisibility(View.VISIBLE);
@@ -496,7 +421,6 @@ public class MainActivity extends AppCompatActivity implements
         toggleResultsButton.setText("Back to Camera");
     }
 
-    @SuppressLint("SetTextI18n")
     private void backToCameraView() {
         resultsPanel.setVisibility(View.GONE);
         previewView.setVisibility(View.VISIBLE);
@@ -504,7 +428,6 @@ public class MainActivity extends AppCompatActivity implements
         toggleResultsButton.setText("Show Results");
     }
 
-    // Permission handling
     private boolean hasCameraPermission() {
         return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED;
@@ -524,7 +447,7 @@ public class MainActivity extends AppCompatActivity implements
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 initializeCamera();
             } else {
-                Toast.makeText(this, "Camera permission required for this app", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Camera permission required", Toast.LENGTH_LONG).show();
                 finish();
             }
         }
@@ -532,39 +455,11 @@ public class MainActivity extends AppCompatActivity implements
 
     @Override
     protected void onDestroy() {
-            super.onDestroy();
-            isCornerDetectionActive = false;
-            cornerHandler.removeCallbacks(cornerRunnable);
-            if (cameraManager != null) {
-                cameraManager.shutdown();
-            }
+        super.onDestroy();
+        isCornerDetectionActive = false;
+        cornerHandler.removeCallbacks(cornerRunnable);
+        if (cameraManager != null) {
+            cameraManager.shutdown();
+        }
     }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        // Camera will be paused automatically by lifecycle
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        // Camera will be resumed automatically by lifecycle
-    }
-
-    @Override
-    public void onBlurAnalyzed(BlurDetector.BlurDetectionResult result) {
-        currentBlurResult = result;
-        mainHandler.post(() -> {
-            @SuppressLint("DefaultLocale") String blurMessage = String.format("Blur: %s (Variance: %.1f)",
-                    result.description, result.laplacianVariance);
-            blurStatusText.setText(blurMessage);
-            // Disable capture button if image is blurred or lighting is bad
-            boolean canCapture = (currentLightingResult != null && currentLightingResult.isCaptureEnabled)
-                    && !result.isBlurred;
-            updateCaptureButtonState(canCapture
-            );
-        });
-    }
-
 }

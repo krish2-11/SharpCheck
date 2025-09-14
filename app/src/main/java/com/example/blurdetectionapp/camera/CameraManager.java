@@ -14,6 +14,7 @@ import androidx.annotation.NonNull;
 import androidx.camera.core.AspectRatio;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
+import androidx.camera.core.ExperimentalGetImage;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
@@ -28,6 +29,11 @@ import com.example.blurdetectionapp.utils.BlurDetector;
 import com.example.blurdetectionapp.utils.LightingAnalyzer;
 import com.google.common.util.concurrent.ListenableFuture;
 
+import org.opencv.android.Utils;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.imgproc.Imgproc;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutionException;
@@ -35,9 +41,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Camera manager for handling CameraX operations and live lighting analysis
+ * Optimized Camera manager using CameraX + OpenCV
  */
-@androidx.camera.core.ExperimentalGetImage
+@ExperimentalGetImage
 public class CameraManager {
 
     private static final String TAG = "CameraManager";
@@ -48,21 +54,33 @@ public class CameraManager {
 
     private ProcessCameraProvider cameraProvider;
     private Camera camera;
+    private Preview preview;
     private ImageCapture imageCapture;
+    private ImageAnalysis imageAnalysis;
 
     // Callbacks
     private LightingAnalysisCallback lightingCallback;
+    private BlurAnalysisCallback blurCallback;
     private ImageCaptureCallback captureCallback;
 
     public interface LightingAnalysisCallback {
         void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result);
     }
 
-    //new callback interface for live blur detection
+    public interface FrameCallback {
+        void onFrameAvailable(Bitmap bitmap);
+    }
+
+    private FrameCallback frameCallback;
+
+    public void setFrameAnalyzerCallback(FrameCallback callback) {
+        this.frameCallback = callback;
+    }
+
+
     public interface BlurAnalysisCallback {
         void onBlurAnalyzed(BlurDetector.BlurDetectionResult result);
     }
-    private BlurAnalysisCallback blurCallback;
 
     public interface ImageCaptureCallback {
         void onImageCaptured(Bitmap bitmap);
@@ -72,19 +90,17 @@ public class CameraManager {
     public CameraManager(Context context, LifecycleOwner lifecycleOwner) {
         this.context = context;
         this.lifecycleOwner = lifecycleOwner;
-        this.cameraExecutor = Executors.newSingleThreadExecutor();
+        this.cameraExecutor = Executors.newFixedThreadPool(2); // allow parallel analysis
     }
 
-    /**
-     * Initialize camera with preview and analysis
-     */
+    /** Initialize camera */
     public void initializeCamera(PreviewView previewView,
                                  LightingAnalysisCallback lightingCallback,
-                                 ImageCaptureCallback captureCallback,
-                                 BlurAnalysisCallback blurCallback) {
+                                 BlurAnalysisCallback blurCallback,
+                                 ImageCaptureCallback captureCallback) {
         this.lightingCallback = lightingCallback;
-        this.captureCallback = captureCallback;
         this.blurCallback = blurCallback;
+        this.captureCallback = captureCallback;
 
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture =
                 ProcessCameraProvider.getInstance(context);
@@ -99,49 +115,30 @@ public class CameraManager {
         }, ContextCompat.getMainExecutor(context));
     }
 
-    /**
-     * Start camera with preview, capture, and analysis use cases
-     */
     private void startCamera(PreviewView previewView) {
-        // Preview use case
-        Preview preview = new Preview.Builder()
+        preview = new Preview.Builder()
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .build();
 
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-        // Image capture use case
         imageCapture = new ImageCapture.Builder()
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .build();
 
-//        // Image analysis use case for live lighting detection
-//        imageAnalysis = new ImageAnalysis.Builder()
-//                .setTargetResolution(new Size(640, 480)) // Lower resolution for faster analysis
-//                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-//                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888) // ADD THIS
-//                .build();
-//
-//        imageAnalysis.setAnalyzer(cameraExecutor, new LightingImageAnalyzer());
-
-        // Image analysis use case for live lighting detection and blur detection
-        ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(640, 480))
+        imageAnalysis = new ImageAnalysis.Builder()
+                .setTargetResolution(new Size(640, 480)) // low res for analysis
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .build();
-        // Set a combined analyzer that runs both lighting and blur analysis
+
         imageAnalysis.setAnalyzer(cameraExecutor, new CombinedImageAnalyzer());
 
-        // Camera selector (back camera)
         CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
 
         try {
-            // Unbind any existing use cases
             cameraProvider.unbindAll();
-
-            // Bind use cases to camera
             camera = cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
@@ -149,281 +146,156 @@ public class CameraManager {
                     imageCapture,
                     imageAnalysis
             );
-
             Log.d(TAG, "Camera started successfully");
-
         } catch (Exception e) {
             Log.e(TAG, "Failed to start camera", e);
         }
     }
 
-    // Combined analyzer for lighting and blur
+    /** Combined Analyzer using OpenCV */
     private class CombinedImageAnalyzer implements ImageAnalysis.Analyzer {
-        private long lastAnalysisTime = 0;
-        private static final long ANALYSIS_INTERVAL = 500; // ms
-
+        private long lastLightingCheck = 0;
+        private static final long LIGHTING_ANALYSIS_INTERVAL = 500; // ms
+        private long lastBlurCheck = 0;
+        private static final long BLUR_ANALYSIS_INTERVAL = 300; // ms
         @Override
         public void analyze(@NonNull ImageProxy image) {
-            long currentTime = System.currentTimeMillis();
-            if (currentTime - lastAnalysisTime < ANALYSIS_INTERVAL) {
-                image.close();
-                return;
-            }
-            lastAnalysisTime = currentTime;
-
-            Bitmap bitmap = imageProxyToBitmap(image);
-            if (bitmap != null) {
-                int rotation = image.getImageInfo().getRotationDegrees();
-                bitmap = rotateBitmap(bitmap, rotation); // rotate to upright
-            }
+            long now = System.currentTimeMillis();
+            Mat mat = imageProxyToMat(image); // 🔑 convert directly to Mat
             image.close();
+            if (mat == null) return;
 
-            if (bitmap == null) return;
+//            // ✅ Throttled Lighting Analysis
+//            if (lightingCallback != null && now - lastLightingCheck >= LIGHTING_ANALYSIS_INTERVAL) {
+//                lastLightingCheck = now;
+//                Mat lightingMat = mat.clone();
+//                cameraExecutor.execute(() -> {
+//                    LightingAnalyzer.LightingAnalysisResult result =
+//                            LightingAnalyzer.analyzeLighting(lightingMat);
+//                    lightingMat.release();
+//                    ContextCompat.getMainExecutor(context).execute(() ->
+//                            lightingCallback.onLightingAnalyzed(result)
+//                    );
+//                });
+//            }
 
-            if (frameAnalyzerCallback != null) {
-                Bitmap finalBitmap = bitmap;
-                ContextCompat.getMainExecutor(context).execute(() -> frameAnalyzerCallback.onFrameAnalyzed(finalBitmap));
+            // ✅ Throttled Blur Analysis
+            if (blurCallback != null && now - lastBlurCheck >= BLUR_ANALYSIS_INTERVAL) {
+                lastBlurCheck = now;
+                Mat blurMat = mat.clone();
+                cameraExecutor.execute(() -> {
+                    BlurDetector.BlurDetectionResult result =
+                            BlurDetector.detectBlurAndOcclusion(blurMat);
+                    blurMat.release();
+                    ContextCompat.getMainExecutor(context).execute(() ->
+                            blurCallback.onBlurAnalyzed(result)
+                    );
+                });
             }
 
-            // Lighting analysis
-            if (lightingCallback != null) {
-                LightingAnalyzer.LightingAnalysisResult lightingResult =
-                        LightingAnalyzer.analyzeLighting(bitmap);
-                ContextCompat.getMainExecutor(context).execute(() -> lightingCallback.onLightingAnalyzed(lightingResult));
+            // ✅ Frame Callback (if needed for overlays)
+            if (frameCallback != null) {
+                Bitmap bitmap = matToBitmap(mat); // only when UI needs it
+                ContextCompat.getMainExecutor(context).execute(() ->
+                        frameCallback.onFrameAvailable(bitmap)
+                );
             }
 
-            // Blur analysis
-            if (blurCallback != null) {
-                BlurDetector.BlurDetectionResult blurResult = BlurDetector.detectBlur(bitmap);
-                ContextCompat.getMainExecutor(context).execute(() -> blurCallback.onBlurAnalyzed(blurResult));
-            }
+            mat.release();
         }
+
+    }
+
+    private Bitmap matToBitmap(Mat mat) {
+        Bitmap bitmap;
+        // Create a Bitmap with the same size as the Mat
+        bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888);
+
+        // Convert Mat → Bitmap
+        Utils.matToBitmap(mat, bitmap);
+
+        return bitmap;
     }
 
 
-    /**
-     * Capture image
-     */
+
+    /** Capture image to bitmap */
     public void captureImage() {
         if (imageCapture == null) {
-            if (captureCallback != null) {
-                captureCallback.onCaptureError("Camera not initialized");
-            }
+            if (captureCallback != null) captureCallback.onCaptureError("Camera not initialized");
             return;
         }
 
-        ImageCapture.OutputFileOptions outputFileOptions = new ImageCapture.OutputFileOptions.Builder(
-                new java.io.File(context.getExternalFilesDir(null), "captured_image_" + System.currentTimeMillis() + ".jpg")
-        ).build();
-
-        imageCapture.takePicture(
-                outputFileOptions,
-                ContextCompat.getMainExecutor(context),
-                new ImageCapture.OnImageSavedCallback() {
-                    @Override
-                    public void onImageSaved(@NonNull ImageCapture.OutputFileResults output) {
-                        // Also capture in memory for immediate processing
-                        captureInMemory();
-                    }
-
-                    @Override
-                    public void onError(@NonNull ImageCaptureException exception) {
-                        Log.e(TAG, "Photo capture failed", exception);
-                        if (captureCallback != null) {
-                            captureCallback.onCaptureError("Capture failed: " + exception.getMessage());
-                        }
-                    }
-                }
-        );
-    }
-
-    /**
-     * Capture image in memory for immediate processing
-     */
-    private void captureInMemory() {
-        if (imageCapture == null) return;
-
-        imageCapture.takePicture(
-                ContextCompat.getMainExecutor(context),
+        imageCapture.takePicture(ContextCompat.getMainExecutor(context),
                 new ImageCapture.OnImageCapturedCallback() {
                     @Override
                     public void onCaptureSuccess(@NonNull ImageProxy image) {
-                        // Convert ImageProxy to Bitmap
                         Bitmap bitmap = imageProxyToBitmap(image);
-
-                        // 🔑 Fix orientation
-                        int rotation = image.getImageInfo().getRotationDegrees();
-                        if (bitmap != null) {
-                            bitmap = rotateBitmap(bitmap, rotation);
-                        }
-
-
                         image.close();
-
-                        if (captureCallback != null && bitmap != null) {
+                        if (bitmap != null && captureCallback != null) {
                             captureCallback.onImageCaptured(bitmap);
                         }
                     }
 
                     @Override
                     public void onError(@NonNull ImageCaptureException exception) {
-                        Log.e(TAG, "In-memory capture failed", exception);
+                        Log.e(TAG, "Capture failed", exception);
                         if (captureCallback != null) {
                             captureCallback.onCaptureError("Capture failed: " + exception.getMessage());
                         }
                     }
-                }
-        );
+                });
     }
 
-    /**
-     * Convert ImageProxy to Bitmap
-     */
-    @androidx.camera.core.ExperimentalGetImage
-    private Bitmap imageProxyToBitmap(ImageProxy image) {
+    /** Convert ImageProxy to OpenCV Mat */
+    private Mat imageProxyToMat(ImageProxy image) {
         Image mediaImage = image.getImage();
-        if (mediaImage == null) {
-            Log.e(TAG, "MediaImage is null, cannot convert to Bitmap");
-            return null;
-        }
-
-        int format = mediaImage.getFormat();
+        if (mediaImage == null) return null;
 
         try {
-            if (format == ImageFormat.YUV_420_888) {
-                Image.Plane[] planes = mediaImage.getPlanes();
-                if (planes.length < 3) {
-                    Log.e(TAG, "YUV_420_888 image does not have 3 planes");
-                    return null;
-                }
+            ByteBuffer yBuffer = image.getPlanes()[0].getBuffer();
+            ByteBuffer uBuffer = image.getPlanes()[1].getBuffer();
+            ByteBuffer vBuffer = image.getPlanes()[2].getBuffer();
 
-                ByteBuffer yBuffer = planes[0].getBuffer();
-                ByteBuffer uBuffer = planes[1].getBuffer();
-                ByteBuffer vBuffer = planes[2].getBuffer();
+            int ySize = yBuffer.remaining();
+            int uSize = uBuffer.remaining();
+            int vSize = vBuffer.remaining();
 
-                int ySize = yBuffer.remaining();
-                int uSize = uBuffer.remaining();
-                int vSize = vBuffer.remaining();
+            byte[] nv21 = new byte[ySize + uSize + vSize];
+            yBuffer.get(nv21, 0, ySize);
+            vBuffer.get(nv21, ySize, vSize);
+            uBuffer.get(nv21, ySize + vSize, uSize);
 
-                byte[] nv21 = new byte[ySize + uSize + vSize];
+            Mat yuv = new Mat(image.getHeight() + image.getHeight() / 2, image.getWidth(), CvType.CV_8UC1);
+            yuv.put(0, 0, nv21);
 
-                yBuffer.get(nv21, 0, ySize);
-                vBuffer.get(nv21, ySize, vSize);
-                uBuffer.get(nv21, ySize + vSize, uSize);
+            Mat rgb = new Mat();
+            Imgproc.cvtColor(yuv, rgb, Imgproc.COLOR_YUV2RGB_NV21, 3);
+            yuv.release();
+            return rgb;
+        } catch (Exception e) {
+            Log.e(TAG, "Error converting ImageProxy to Mat", e);
+            return null;
+        }
+    }
 
-                YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21,
-                        image.getWidth(), image.getHeight(), null);
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                yuvImage.compressToJpeg(new Rect(0, 0, image.getWidth(), image.getHeight()), 100, out);
-                byte[] imageBytes = out.toByteArray();
-
-                return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
-
-            } else if (format == ImageFormat.JPEG) {
-                ByteBuffer buffer = mediaImage.getPlanes()[0].getBuffer();
-                byte[] jpegBytes = new byte[buffer.remaining()];
-                buffer.get(jpegBytes);
-                return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.length);
-
-            } else {
-                Log.e(TAG, "Unsupported image format: " + format);
-                return null;
-            }
+    /** For capture only: convert ImageProxy to Bitmap */
+    private Bitmap imageProxyToBitmap(ImageProxy image) {
+        Image mediaImage = image.getImage();
+        if (mediaImage == null) return null;
+        try {
+            ByteBuffer buffer = mediaImage.getPlanes()[0].getBuffer();
+            byte[] bytes = new byte[buffer.remaining()];
+            buffer.get(bytes);
+            return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
         } catch (Exception e) {
             Log.e(TAG, "Error converting ImageProxy to Bitmap", e);
             return null;
         }
     }
 
-
-    /**
-     * Image analyzer for live lighting analysis
-     */
-    private class LightingImageAnalyzer implements ImageAnalysis.Analyzer {
-        private long lastAnalysisTime = 0;
-        private static final long ANALYSIS_INTERVAL = 500; // Analyze every 500ms
-
-        @Override
-        public void analyze(@NonNull ImageProxy image) {
-            long currentTime = System.currentTimeMillis();
-
-            // Throttle analysis to avoid excessive processing
-            if (currentTime - lastAnalysisTime < ANALYSIS_INTERVAL) {
-                image.close();
-                return;
-            }
-
-            lastAnalysisTime = currentTime;
-
-            try {
-                // Convert to bitmap for analysis
-                Bitmap bitmap = imageProxyToBitmap(image);
-
-                int rotation = image.getImageInfo().getRotationDegrees();
-                if (bitmap != null) {
-                    bitmap = rotateBitmap(bitmap, rotation);
-                }
-
-                if (bitmap != null && lightingCallback != null) {
-                    // Perform lighting analysis
-                    LightingAnalyzer.LightingAnalysisResult result =
-                            LightingAnalyzer.analyzeLighting(bitmap);
-
-                    // Post result to main thread
-                    ContextCompat.getMainExecutor(context).execute(() -> lightingCallback.onLightingAnalyzed(result));
-                }
-
-                if(bitmap != null && frameAnalyzerCallback != null){
-                    frameAnalyzerCallback.onFrameAnalyzed(bitmap);
-                }
-
-            } catch (Exception e) {
-                Log.e(TAG, "Error in lighting analysis", e);
-            } finally {
-                image.close();
-            }
-        }
-    }
-
-    /**
-     * Check if camera is available
-     */
-    public boolean isCameraAvailable() {
-        return camera != null;
-    }
-
-    /**
-     * Enable/disable torch
-     */
-    public void setTorchEnabled(boolean enabled) {
-        if (camera != null && camera.getCameraInfo().hasFlashUnit()) {
-            camera.getCameraControl().enableTorch(enabled);
-        }
-    }
-
-    private Bitmap rotateBitmap(Bitmap source, float angle) {
-        android.graphics.Matrix matrix = new android.graphics.Matrix();
-        matrix.postRotate(angle);
-        return Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
-    }
-
-    /**
-     * Shutdown camera
-     */
     public void shutdown() {
-        if (cameraProvider != null) {
-            cameraProvider.unbindAll();
-        }
-        cameraExecutor.shutdown();
-    }
-
-    public interface FrameAnalyzerCallback {
-        void onFrameAnalyzed(Bitmap bitmap);
-    }
-
-    private FrameAnalyzerCallback frameAnalyzerCallback;
-
-    public void setFrameAnalyzerCallback(FrameAnalyzerCallback callback) {
-        this.frameAnalyzerCallback = callback;
+        if (cameraProvider != null) cameraProvider.unbindAll();
+        cameraExecutor.shutdownNow();
     }
 }
