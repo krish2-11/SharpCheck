@@ -152,4 +152,10 @@ public class DocumentDetection {
         }
         return smoothed;
     }
+
+    public void resetDetection() {
+        lastCorners = null;
+//        framesWithoutDetection = 0;
+        Log.d(TAG, "Detection reset");
+    }
 }

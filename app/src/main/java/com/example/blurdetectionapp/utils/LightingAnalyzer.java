@@ -1,10 +1,8 @@
 package com.example.blurdetectionapp.utils;
 
 import android.annotation.SuppressLint;
-import android.graphics.Bitmap;
 import android.util.Log;
 
-import org.opencv.android.Utils;
 import org.opencv.core.*;
 import org.opencv.imgproc.Imgproc;
 
@@ -53,26 +51,31 @@ public class LightingAnalyzer {
         }
     }
 
-    public static LightingAnalysisResult analyzeLighting(Bitmap bitmap) {
-        if (bitmap == null) {
+    public static LightingAnalysisResult analyzeLighting(Mat src) {
+        if (src == null || src.empty()) {
             return new LightingAnalysisResult(0, 0, false,
                     LightingCondition.BAD, "No Image", "No image to analyze", false);
         }
 
         try {
             // Resize for faster processing - maintain aspect ratio
-            int originalWidth = bitmap.getWidth();
-            int originalHeight = bitmap.getHeight();
+            int originalWidth = src.width();
+            int originalHeight = src.height();
             int newHeight = (PROCESSING_WIDTH * originalHeight) / originalWidth;
 
-            Bitmap resizedBitmap = Bitmap.createScaledBitmap(bitmap, PROCESSING_WIDTH, newHeight, false);
-
-            Mat src = new Mat();
-            Utils.bitmapToMat(resizedBitmap, src);
+            Mat resized = new Mat();
+            Size newSize = new Size(PROCESSING_WIDTH, newHeight);
+            Imgproc.resize(src, resized, newSize);
 
             // Convert to grayscale once for all operations
             Mat gray = new Mat();
-            Imgproc.cvtColor(src, gray, Imgproc.COLOR_BGRA2GRAY);
+            if (resized.channels() == 3) {
+                Imgproc.cvtColor(resized, gray, Imgproc.COLOR_BGR2GRAY);
+            } else if (resized.channels() == 4) {
+                Imgproc.cvtColor(resized, gray, Imgproc.COLOR_BGRA2GRAY);
+            } else {
+                gray = resized.clone();
+            }
 
             // Analyze only essential metrics
             double brightRatio = analyzeBrightPixelsOptimized(gray);
@@ -90,9 +93,8 @@ public class LightingAnalyzer {
                     brightRatio, laplacianVariance, reflectionDetected, condition));
 
             // Clean up
-            src.release();
+            resized.release();
             gray.release();
-            resizedBitmap.recycle();
 
             return new LightingAnalysisResult(brightRatio, laplacianVariance, reflectionDetected,
                     condition, status, details, enableCapture);
@@ -127,7 +129,7 @@ public class LightingAnalyzer {
         MatOfDouble stddev = new MatOfDouble();
         Core.meanStdDev(laplacian, mean, stddev);
 
-        double variance = stddev.get(0,0)[0] * stddev.get(0,0)[0];
+        double variance = stddev.get(0, 0)[0] * stddev.get(0, 0)[0];
 
         laplacian.release();
         return variance;
@@ -140,7 +142,7 @@ public class LightingAnalyzer {
         Imgproc.threshold(gray, brightMask, REFLECTION_BRIGHTNESS_THRESHOLD, 255, Imgproc.THRESH_BINARY);
 
         // Morphological opening to remove small noise
-        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, new Size(5,5));
+        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, new Size(5, 5));
         Imgproc.morphologyEx(brightMask, brightMask, Imgproc.MORPH_OPEN, kernel);
 
         // Find large contours only

@@ -42,9 +42,9 @@ import java.util.Objects;
 
 @ExperimentalGetImage
 public class MainActivity extends AppCompatActivity implements
-        CameraManager.LightingAnalysisCallback,
-        CameraManager.ImageCaptureCallback,
-        CameraManager.BlurAnalysisCallback {
+//        CameraManager.LightingAnalysisCallback,
+        CameraManager.ImageCaptureCallback {
+//        CameraManager.BlurAnalysisCallback {
 
     private static final String TAG = "MainActivity";
     private static final int CAMERA_PERMISSION_CODE = 200;
@@ -69,8 +69,8 @@ public class MainActivity extends AppCompatActivity implements
     private Handler mainHandler;
 
     // Current analysis results
-    private LightingAnalyzer.LightingAnalysisResult currentLightingResult;
-    private BlurDetector.BlurDetectionResult currentBlurResult;
+//    private LightingAnalyzer.LightingAnalysisResult currentLightingResult;
+//    private BlurDetector.BlurDetectionResult currentBlurResult;
 
     // Document detection loop
     private final Handler cornerHandler = new Handler(Looper.getMainLooper());
@@ -80,6 +80,8 @@ public class MainActivity extends AppCompatActivity implements
 
     // Captured image
     private Bitmap capturedBitmap;
+
+    private TextView modeRectangle, modeSquare, modeCard;
 
     static {
         if (!OpenCVLoader.initDebug()) {
@@ -107,9 +109,9 @@ public class MainActivity extends AppCompatActivity implements
 
     private void initializeViews() {
         previewView = findViewById(R.id.previewView);
-        lightingStatusText = findViewById(R.id.lightingStatusText);
-        lightingDetailText = findViewById(R.id.lightingDetailText);
-        blurStatusText = findViewById(R.id.BlurStatusText);
+//        lightingStatusText = findViewById(R.id.lightingStatusText);
+//        lightingDetailText = findViewById(R.id.lightingDetailText);
+//        blurStatusText = findViewById(R.id.BlurStatusText);
 
         captureButton = findViewById(R.id.captureButton);
         toggleResultsButton = findViewById(R.id.toggleResultsButton);
@@ -120,21 +122,73 @@ public class MainActivity extends AppCompatActivity implements
         imageView2 = findViewById(R.id.imageView2);
         resultText = findViewById(R.id.resultText);
 
+        modeRectangle=findViewById(R.id.modeRectangle);
+        modeSquare=findViewById(R.id.modeSquare);
+        modeCard=findViewById(R.id.modeCard);
+
+        View.OnClickListener modeClickListener = v -> {
+            String mode = ((TextView)v).getText().toString();
+            onModeChanged(mode);
+            highlightSelected((TextView)v);
+        };
+
+        modeSquare.setOnClickListener(modeClickListener);
+        modeRectangle.setOnClickListener(modeClickListener);
+        modeCard.setOnClickListener(modeClickListener);
+
         overlayView = findViewById(R.id.overlayView);
 
         captureButton.setOnClickListener(v -> onCaptureClicked());
         toggleResultsButton.setOnClickListener(v -> toggleResultsView());
         backToCameraButton.setOnClickListener(v -> backToCameraView());
 
+//        captureButton.setEnabled(false);
+        captureButton.setEnabled(true);
         documentDetection = new DocumentDetection();
 
-        updateCaptureButtonState(false);
+//        updateCaptureButtonState(false);
+        updateCaptureButtonState(true);
+    }
+
+    private void onModeChanged(String mode) {
+        OverlayView.OverlayType type = null;
+        switch (mode) {
+            case "A4":
+                type = OverlayView.OverlayType.PORTRAIT;
+                break;
+            case "Square":
+                type = OverlayView.OverlayType.SQUARE;
+                break;
+            case "Card":
+                type = OverlayView.OverlayType.LANDSCAPE;
+                break;
+        }
+
+        // Set overlay without bitmap, just the type for proper sizing
+        if (type != null) {
+            overlayView.setOverlay(null, type);
+            // ADD THIS LINE - Reset detection when changing modes
+            documentDetection.resetDetection();
+        }
+
+        Toast.makeText(this, "Mode: " + mode, Toast.LENGTH_SHORT).show();
+    }
+
+    private void highlightSelected(TextView selected) {
+        // Reset all
+        modeCard.setTextColor(Color.WHITE);
+        modeRectangle.setTextColor(Color.WHITE);
+        modeSquare.setTextColor(Color.WHITE);
+
+        // Highlight current
+        selected.setTextColor(Color.YELLOW);
     }
 
     private void initializeCamera() {
         cameraManager = new CameraManager(this, this);
-        cameraManager.initializeCamera(previewView, this, this, this);
-        cameraManager.setFrameAnalyzerCallback(this::processFrame);
+        cameraManager.initializeCamera(previewView, null, null, this);
+        setFrameAnalyzerCallback(this::processFrame);
+        cameraManager.setOverlayView(overlayView);
         startCornerDetectionLoop();
         Log.d(TAG, "Camera initialized");
     }
@@ -145,37 +199,102 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
+    public void setFrameAnalyzerCallback(CameraManager.FrameCallback callback) {
+        if (cameraManager != null) {
+            cameraManager.setFrameCallback(callback);
+        }
+    }
+
+    // NEW METHOD: Extract ROI bitmap from the overlay area
+    private Bitmap extractROIFromFrame(Bitmap frame) {
+        if (frame == null || overlayView == null) return null;
+
+        RectF overlayRect = overlayView.getOverlayRect();
+        if (overlayRect == null){
+            Toast.makeText(this, "overlay is null", Toast.LENGTH_SHORT).show();
+            return frame;
+        } // fallback to full frame
+
+        // Scale overlay rect from view coordinates to bitmap coordinates
+        Rect bitmapRect = scaleRectToBitmap(overlayRect,
+                frame.getWidth(), frame.getHeight(),
+                overlayView.getWidth(), overlayView.getHeight());
+
+        // Ensure rect is within bitmap bounds
+        bitmapRect.left = Math.max(0, bitmapRect.left);
+        bitmapRect.top = Math.max(0, bitmapRect.top);
+        bitmapRect.right = Math.min(frame.getWidth(), bitmapRect.right);
+        bitmapRect.bottom = Math.min(frame.getHeight(), bitmapRect.bottom);
+
+        if (bitmapRect.width() <= 0 || bitmapRect.height() <= 0) {
+            return frame; // fallback to full frame
+        }
+
+        try {
+            return Bitmap.createBitmap(frame,
+                    bitmapRect.left, bitmapRect.top,
+                    bitmapRect.width(), bitmapRect.height());
+        } catch (Exception e) {
+            Log.e(TAG, "Error extracting ROI: " + e.getMessage());
+            return frame; // fallback to full frame
+        }
+    }
+
     private void startCornerDetectionLoop() {
         isCornerDetectionActive = true;
         cornerRunnable = new Runnable() {
             @Override
             public void run() {
                 if (latestFrame != null) {
-                    Point[] corners = documentDetection.detectDocumentCornersPoints(latestFrame);
-                    if (corners != null) {
-                        PointF[] mappedPoints = mapPointsToOverlay(
-                                corners,
-                                latestFrame.getWidth(),
-                                latestFrame.getHeight(),
-                                overlayView
-                        );
+                    // Extract ROI before document detection
+                    Bitmap roiBitmap = extractROIFromFrame(latestFrame);
+                    if (roiBitmap != null) {
+                        Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
+                        if (corners != null) {
+                            // Map corners from ROI space back to overlay view coordinates
+                            PointF[] mappedPoints = mapROICornersToOverlay(corners, roiBitmap);
+                            runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
+                        } else {
+                            runOnUiThread(() -> overlayView.clearCorners());
+                        }
 
-                        runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
-                    } else {
-                        runOnUiThread(() -> overlayView.clearCorners());
+                        // Clean up ROI bitmap if it's different from original
+                        if (roiBitmap != latestFrame) {
+                            roiBitmap.recycle();
+                        }
                     }
-//                    new Thread(() -> {
-//                        Bitmap shadowMask = ShadowDetection.detectShadows(latestFrame);
-//                        runOnUiThread(() -> overlayView.setShadowMask(shadowMask));
-//                    }).start();
                 }
 
                 if (isCornerDetectionActive) {
-                    cornerHandler.postDelayed(this, 2000); // every 2s
+                    cornerHandler.postDelayed(this, 300);
                 }
             }
         };
         cornerHandler.post(cornerRunnable);
+    }
+
+    // NEW METHOD: Map corners from ROI coordinates to overlay view coordinates
+    private PointF[] mapROICornersToOverlay(Point[] corners, Bitmap roiBitmap) {
+        RectF overlayRect = overlayView.getOverlayRect();
+        if (overlayRect == null) {
+            // Fallback to original mapping method
+            return mapPointsToOverlay(corners, roiBitmap.getWidth(), roiBitmap.getHeight(), overlayView);
+        }
+
+        PointF[] mapped = new PointF[4];
+        for (int i = 0; i < 4; i++) {
+            // Scale corner from ROI bitmap space to overlay rect space
+            float x = (float) (corners[i].x * overlayRect.width() / roiBitmap.getWidth());
+            float y = (float) (corners[i].y * overlayRect.height() / roiBitmap.getHeight());
+
+            // Translate to overlay rect position
+            mapped[i] = new PointF(
+                    overlayRect.left + x,
+                    overlayRect.top + y
+            );
+        }
+
+        return expandDocumentCorners(mapped, 1.3f);
     }
 
     private PointF[] mapPointsToOverlay(Point[] points, int imgWidth, int imgHeight, View overlayView) {
@@ -230,20 +349,20 @@ public class MainActivity extends AppCompatActivity implements
 
     @SuppressLint("SetTextI18n")
     private void onCaptureClicked() {
-        if (currentLightingResult == null) {
-            Toast.makeText(this, "Lighting analysis not ready", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        if (currentLightingResult.lightingCondition == LightingAnalyzer.LightingCondition.BAD) {
-            showLightingIssueDialog();
-            return;
-        }
-
-        if (currentBlurResult != null && currentBlurResult.isBlurred) {
-            Toast.makeText(this, "Image is too blurry. Please adjust focus.", Toast.LENGTH_SHORT).show();
-            return;
-        }
+//        if (currentLightingResult == null) {
+//            Toast.makeText(this, "Lighting analysis not ready", Toast.LENGTH_SHORT).show();
+//            return;
+//        }
+//
+//        if (currentLightingResult.lightingCondition == LightingAnalyzer.LightingCondition.BAD) {
+//            showLightingIssueDialog();
+//            return;
+//        }
+//
+//        if (currentBlurResult != null && currentBlurResult.isBlurred) {
+//            Toast.makeText(this, "Image is too blurry. Please adjust focus.", Toast.LENGTH_SHORT).show();
+//            return;
+//        }
 
         if (cameraManager != null) {
             captureButton.setEnabled(false);
@@ -252,71 +371,53 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
-    private void showLightingIssueDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Image Quality Issue")
-                .setMessage("Cannot capture image due to lighting:\n\n" +
-                        generateLightingIssueExplanation(currentLightingResult) +
-                        "\n\nPlease adjust lighting or camera position.")
-                .setPositiveButton("OK", (dialog, which) -> dialog.dismiss())
-                .setNegativeButton("Capture Anyway", (dialog, which) -> {
-                    if (cameraManager != null) {
-                        captureButton.setEnabled(false);
-                        captureButton.setText("Capturing...");
-                        cameraManager.captureImage();
-                    }
-                    dialog.dismiss();
-                })
-                .show();
-    }
+//    @SuppressLint("SetTextI18n")
+//    private void showLightingIssueDialog() {
+//        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+//        builder.setTitle("Image Quality Issue")
+//                .setMessage("Cannot capture image due to lighting:\n\n" +
+//                        generateLightingIssueExplanation(currentLightingResult) +
+//                        "\n\nPlease adjust lighting or camera position.")
+//                .setPositiveButton("OK", (dialog, which) -> dialog.dismiss())
+//                .setNegativeButton("Capture Anyway", (dialog, which) -> {
+//                    if (cameraManager != null) {
+//                        captureButton.setEnabled(false);
+//                        captureButton.setText("Capturing...");
+//                        cameraManager.captureImage();
+//                    }
+//                    dialog.dismiss();
+//                })
+//                .show();
+//    }
 
-    @Override
-    public void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result) {
-        currentLightingResult = result;
-        mainHandler.post(() -> {
-            lightingStatusText.setText(result.statusMessage);
-            lightingDetailText.setText(result.detailMessage);
+//    @Override
+//    public void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result) {
+//        currentLightingResult = result;
+//        mainHandler.post(() -> {
+//            lightingStatusText.setText(result.statusMessage);
+//            lightingDetailText.setText(result.detailMessage);
+//
+//            boolean canCapture = result.isCaptureEnabled
+//                    && (currentBlurResult == null || !currentBlurResult.isBlurred);
+//            updateCaptureButtonState(canCapture);
+//        });
+//    }
 
-            boolean canCapture = result.isCaptureEnabled
-                    && (currentBlurResult == null || !currentBlurResult.isBlurred);
-            updateCaptureButtonState(canCapture);
-        });
-    }
-
-    private String generateLightingIssueExplanation(LightingAnalyzer.LightingAnalysisResult result) {
-        StringBuilder explanation = new StringBuilder();
-
-        if (result.hasReflection) {
-            explanation.append("• Reflection detected on document surface\n");
-        }
-        if (result.brightPixelRatio >= 0.55) {
-            explanation.append("• Excessive brightness: possible overexposure\n");
-        }
-//        if (result.laplacianVariance <= 900) {
-//            explanation.append("• Low contrast: insufficient detail\n");
+//    private String generateLightingIssueExplanation(LightingAnalyzer.LightingAnalysisResult result) {
+//        StringBuilder explanation = new StringBuilder();
+//
+//        if (result.hasReflection) {
+//            explanation.append("• Reflection detected on document surface\n");
 //        }
-
-        if (explanation.length() == 0) {
-            explanation.append("Multiple lighting issues detected");
-        }
-        return explanation.toString();
-    }
-
-    @Override
-    public void onBlurAnalyzed(BlurDetector.BlurDetectionResult result) {
-        currentBlurResult = result;
-        mainHandler.post(() -> {
-            @SuppressLint("DefaultLocale")
-            String blurMessage = String.format("Blur: %b, Occluded: %b, AvgVariance: %.1f, BlurPct: %.3f, OcclusionPct: %.3f)",
-                    result.isBlurred, result.isOccluded,  result.avgVariance, result.blurPercentage, result.occlusionPercentage);
-
-            blurStatusText.setText(blurMessage);
-
-            boolean canCapture = (currentLightingResult != null && currentLightingResult.isCaptureEnabled)
-                    && !result.isBlurred;
-            updateCaptureButtonState(canCapture);
-        });
-    }
+//        if (result.brightPixelRatio >= 0.55) {
+//            explanation.append("• Excessive brightness: possible overexposure\n");
+//        }
+//
+//        if (explanation.length() == 0) {
+//            explanation.append("Multiple lighting issues detected");
+//        }
+//        return explanation.toString();
+//    }
 
     @Override
     public void onImageCaptured(Bitmap bitmap) {
@@ -325,39 +426,68 @@ public class MainActivity extends AppCompatActivity implements
         mainHandler.post(() -> {
             imageView.setImageBitmap(bitmap);
 
-            // ✅ Detect document corners on full-res image
-            RectF roi = overlayView.getOverlayRect();
-            if (roi != null && latestFrame != null) {
-                // scale ROI from view coordinates back to camera-bitmap coordinates
-                Rect scaledRoi = scaleRectToBitmap(roi, latestFrame.getWidth(), latestFrame.getHeight(),
-                        overlayView.getWidth(), overlayView.getHeight());
-                Bitmap cropped = Bitmap.createBitmap(
-                        latestFrame,
-                        scaledRoi.left, scaledRoi.top,
-                        scaledRoi.width(), scaledRoi.height()
-                );
-                Point[] corners = documentDetection.detectDocumentCornersPoints(cropped);
+            // CHANGE: Extract ROI from captured image for document detection
+            Bitmap roiBitmap = extractROIFromFrame(latestFrame != null ? latestFrame : bitmap);
+            if (roiBitmap != null) {
+                Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
                 if (corners != null) {
-                    // Warp the document
-                    Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(latestFrame, corners);
-
-                    // Show cropped document in imageView2
+                    // Warp the document using the full resolution captured image
+                    // but scale the corners appropriately
+                    Point[] scaledCorners = scaleCornersToCapturedImage(corners, roiBitmap, bitmap);
+                    Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, scaledCorners);
                     imageView2.setImageBitmap(warpedBitmap);
-
                 } else {
                     Toast.makeText(this, "No document detected", Toast.LENGTH_SHORT).show();
                     imageView2.setImageResource(R.drawable.no_document);
+                }
+
+                // Clean up ROI bitmap if different from original
+                if (roiBitmap != bitmap && roiBitmap != latestFrame) {
+                    roiBitmap.recycle();
                 }
             }
 
             showResultsView();
 
-            if (currentLightingResult != null) {
-                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
-            } else {
-                updateCaptureButtonState(false);
-            }
+//            if (currentLightingResult != null) {
+//                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
+//            } else {
+//                updateCaptureButtonState(false);
+//            }
+            updateCaptureButtonState(true);
         });
+    }
+
+    // NEW METHOD: Scale corners from ROI to captured image coordinates
+    private Point[] scaleCornersToCapturedImage(Point[] roiCorners, Bitmap roiBitmap, Bitmap capturedBitmap) {
+        if (latestFrame == null || overlayView == null) {
+            return roiCorners; // fallback
+        }
+
+        RectF overlayRect = overlayView.getOverlayRect();
+        if (overlayRect == null) {
+            return roiCorners; // fallback
+        }
+
+        // Scale ROI rect from view coordinates to captured image coordinates
+        Rect capturedROI = scaleRectToBitmap(overlayRect,
+                capturedBitmap.getWidth(), capturedBitmap.getHeight(),
+                overlayView.getWidth(), overlayView.getHeight());
+
+        Point[] scaledCorners = new Point[4];
+        for (int i = 0; i < 4; i++) {
+            // Scale corner from ROI bitmap space to captured image ROI space
+            double x = roiCorners[i].x * capturedROI.width() / roiBitmap.getWidth();
+            double y = roiCorners[i].y * capturedROI.height() / roiBitmap.getHeight();
+
+            // Translate to captured image coordinates
+            scaledCorners[i] = new Point(
+                    capturedROI.left + x,
+                    capturedROI.top + y
+            );
+        }
+
+        return scaledCorners;
     }
 
     private Rect scaleRectToBitmap(RectF rectInView,
@@ -392,11 +522,12 @@ public class MainActivity extends AppCompatActivity implements
     public void onCaptureError(String error) {
         mainHandler.post(() -> {
             Toast.makeText(this, "Capture failed: " + error, Toast.LENGTH_SHORT).show();
-            if (currentLightingResult != null) {
-                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
-            } else {
-                updateCaptureButtonState(false);
-            }
+//            if (currentLightingResult != null) {
+//                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
+//            } else {
+//                updateCaptureButtonState(false);
+//            }
+            updateCaptureButtonState(true);
         });
     }
 
@@ -414,6 +545,7 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
+    @SuppressLint("SetTextI18n")
     private void showResultsView() {
         previewView.setVisibility(View.GONE);
         resultsPanel.setVisibility(View.VISIBLE);
@@ -421,6 +553,7 @@ public class MainActivity extends AppCompatActivity implements
         toggleResultsButton.setText("Back to Camera");
     }
 
+    @SuppressLint("SetTextI18n")
     private void backToCameraView() {
         resultsPanel.setVisibility(View.GONE);
         previewView.setVisibility(View.VISIBLE);
@@ -462,4 +595,32 @@ public class MainActivity extends AppCompatActivity implements
             cameraManager.shutdown();
         }
     }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // Camera will be paused automatically by lifecycle
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Camera will be resumed automatically by lifecycle
+    }
+
+//    @Override
+//    public void onBlurAnalyzed(BlurDetector.BlurDetectionResult result) {
+//        currentBlurResult = result;
+//        mainHandler.post(() -> {
+//            @SuppressLint("DefaultLocale")
+//            String blurMessage = String.format("Blur: %b, Occluded: %b, AvgVariance: %.1f, BlurPct: %.3f, OcclusionPct: %.3f)",
+//                    result.isBlurred, result.isOccluded,  result.avgVariance, result.blurPercentage, result.occlusionPercentage);
+//
+//            blurStatusText.setText(blurMessage);
+//
+//            boolean canCapture = (currentLightingResult != null && currentLightingResult.isCaptureEnabled)
+//                    && !result.isBlurred;
+//            updateCaptureButtonState(canCapture);
+//        });
+//    }
 }

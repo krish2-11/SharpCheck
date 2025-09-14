@@ -6,12 +6,14 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.PointF;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
 import android.util.AttributeSet;
-import android.util.Log;
+import android.util.DisplayMetrics;
 import android.view.View;
-import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -20,21 +22,27 @@ public class OverlayView extends View {
 
     private PointF[] points = null;
     private Bitmap shadowMask = null;
-    private Bitmap overlayBitmap = null;
+
     public enum OverlayType { SQUARE, PORTRAIT, LANDSCAPE }
     private OverlayType overlayType = OverlayType.SQUARE;
 
     private Paint linePaint;
     private Paint cornerPaint;
     private Paint shadowPaint;
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private Paint overlayPaint;
+    private Paint clearPaint;
 
-    private RectF overlayRect; // set whenever you change the overlay
-    private Paint rectPaint;
+    private RectF overlayRect;
 
+    // NEW: Make overlayRect publicly accessible for ROI extraction
     public RectF getOverlayRect() {
-        return overlayRect;
+        calculateOverlayRect();
+        if (overlayRect != null) {
+            return new RectF(overlayRect);
+        }
+        return null;
     }
+
 
     public OverlayView(Context context) {
         super(context);
@@ -52,7 +60,6 @@ public class OverlayView extends View {
     }
 
     private void init() {
-        // Make sure view will draw
         setWillNotDraw(false);
 
         linePaint = new Paint();
@@ -64,17 +71,23 @@ public class OverlayView extends View {
         cornerPaint = new Paint();
         cornerPaint.setColor(0xFFFF0000); // Red
         cornerPaint.setStrokeWidth(12f);
-        cornerPaint.setStyle(Paint.Style.FILL); // Changed to FILL for better visibility
+        cornerPaint.setStyle(Paint.Style.FILL);
         cornerPaint.setAntiAlias(true);
 
         shadowPaint = new Paint();
         shadowPaint.setAlpha(120);
         shadowPaint.setAntiAlias(true);
 
-        rectPaint = new Paint();
-        rectPaint.setColor(Color.YELLOW);      // Border color
-        rectPaint.setStyle(Paint.Style.STROKE);
-        rectPaint.setStrokeWidth(8f);
+        // Paint for the semi-transparent overlay outside capture area
+        overlayPaint = new Paint();
+        overlayPaint.setColor(Color.BLACK);
+        overlayPaint.setAlpha(150); // Semi-transparent
+        overlayPaint.setAntiAlias(true);
+
+        // Paint to clear the capture area (make it transparent)
+        clearPaint = new Paint();
+        clearPaint.setAntiAlias(true);
+        clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
     }
 
     public void setPoints(PointF[] points) {
@@ -82,35 +95,9 @@ public class OverlayView extends View {
         invalidate();
     }
 
-    // alias to match MainActivity
     public void setDocumentCorners(PointF[] points) {
         setPoints(points);
     }
-
-    private RectF computeDestRect(Bitmap bmp) {
-        float viewW = getWidth();
-        float viewH = getHeight();
-
-        // bitmap aspect
-        float bmpRatio = (float) bmp.getWidth() / bmp.getHeight();
-        float viewRatio = viewW / viewH;
-
-        float destW, destH;
-        if (bmpRatio > viewRatio) {
-            // Fit width
-            destW = viewW * 0.8f; // or overlayRect.width() if you use it
-            destH = destW / bmpRatio;
-        } else {
-            // Fit height
-            destH = viewH * 0.8f;
-            destW = destH * bmpRatio;
-        }
-
-        float left = (viewW - destW) / 2f;
-        float top  = (viewH - destH) / 2f;
-        return new RectF(left, top, left + destW, top + destH);
-    }
-
 
     public void clearCorners() {
         this.points = null;
@@ -118,62 +105,131 @@ public class OverlayView extends View {
         invalidate();
     }
 
+    public void setShadowMask(Bitmap shadowMask) {
+        this.shadowMask = shadowMask;
+        invalidate();
+    }
+
     public void setOverlay(Bitmap bitmap, OverlayType type) {
-        this.overlayBitmap = bitmap;
         this.overlayType = type;
         calculateOverlayRect();
         invalidate();
     }
 
     private void calculateOverlayRect() {
-        if (overlayBitmap == null) {
+        int viewWidth = getWidth();
+        int viewHeight = getHeight();
+
+        if (viewWidth == 0 || viewHeight == 0) {
+            // View not measured yet, will be called again in onDraw
             overlayRect = null;
             return;
         }
 
+        float centerX = viewWidth / 2f;
+        float centerY = viewHeight / 2f;
+
         switch (overlayType) {
             case SQUARE:
-                // hard-coded values in view coordinates (example only)
-                overlayRect = new RectF(200f, 400f, 800f, 1000f);
+                // Square overlay (good for documents, receipts)
+                float squareSize = Math.min(viewWidth, viewHeight) * 0.7f;
+                overlayRect = new RectF(
+                        centerX - squareSize/2,
+                        centerY - squareSize/2,
+                        centerX + squareSize/2,
+                        centerY + squareSize/2
+                );
                 break;
 
-            case PORTRAIT: // height > width
-                overlayRect = new RectF(300f, 200f, 700f, 1200f);
+            case PORTRAIT: // A4 Portrait
+                // A4 ratio is 1:1.414 (width:height)
+                float a4Width = viewWidth * 0.8f;
+                float a4Height = a4Width * 1.414f;
+
+                // If height exceeds view bounds, scale down
+                if (a4Height > viewHeight * 0.9f) {
+                    a4Height = viewHeight * 0.9f;
+                    a4Width = a4Height / 1.414f;
+                }
+
+                overlayRect = new RectF(
+                        centerX - a4Width/2,
+                        centerY - a4Height/2,
+                        centerX + a4Width/2,
+                        centerY + a4Height/2
+                );
                 break;
 
-            case LANDSCAPE: // width > height
-                overlayRect = new RectF(150f, 500f, 950f, 900f);
+            case LANDSCAPE: // Card (Credit Card, Aadhar, PAN, etc.)
+                // Standard card ratio is approximately 1.6:1 (85.6mm x 53.98mm)
+                float cardWidth = viewWidth * 0.85f;
+                float cardHeight = cardWidth / 1.586f; // Credit card ratio
+
+                // Ensure card doesn't exceed view bounds
+                if (cardHeight > viewHeight * 0.6f) {
+                    cardHeight = viewHeight * 0.6f;
+                    cardWidth = cardHeight * 1.586f;
+                }
+
+                overlayRect = new RectF(
+                        centerX - cardWidth/2,
+                        centerY - cardHeight/2,
+                        centerX + cardWidth/2,
+                        centerY + cardHeight/2
+                );
                 break;
         }
-
     }
 
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        calculateOverlayRect();
+    }
 
     @Override
     protected void onDraw(@NonNull Canvas canvas) {
         super.onDraw(canvas);
 
-        // Draw shadow mask first (if exists)
-        if (shadowMask != null && !shadowMask.isRecycled()) {
+        // Calculate overlay rect if not already calculated
+        if (overlayRect == null) {
+            calculateOverlayRect();
+        }
+
+        // Draw shadow mask first (if exists) - only within overlay area
+        if (shadowMask != null && !shadowMask.isRecycled() && overlayRect != null) {
+            canvas.save();
+            canvas.clipRect(overlayRect);
+
             @SuppressLint("DrawAllocation")
             Bitmap scaled = Bitmap.createScaledBitmap(shadowMask, getWidth(), getHeight(), false);
             canvas.drawBitmap(scaled, 0, 0, shadowPaint);
+
+            canvas.restore();
         }
 
-        if (overlayBitmap != null && overlayRect != null) {
-            overlayRect = computeDestRect(overlayBitmap);
-            canvas.drawBitmap(overlayBitmap, null, overlayRect, paint);
-            canvas.drawRect(overlayRect, rectPaint);
-        }
-
-        // 2. limit further drawing to overlayRect
+        // Create the overlay effect: darken everything except the capture area
         if (overlayRect != null) {
+            // Draw semi-transparent overlay over entire view
+            canvas.drawRect(0, 0, getWidth(), getHeight(), overlayPaint);
+
+            // Clear the capture area to make it fully visible
+            canvas.drawRoundRect(overlayRect, 20f, 20f, clearPaint);
+
+            // Optional: Draw a subtle border around the capture area
+            Paint borderPaint = new Paint();
+            borderPaint.setColor(Color.WHITE);
+            borderPaint.setStyle(Paint.Style.STROKE);
+            borderPaint.setStrokeWidth(3f);
+            borderPaint.setAntiAlias(true);
+            canvas.drawRoundRect(overlayRect, 20f, 20f, borderPaint);
+        }
+
+        // Draw document corners and lines only within the capture area
+        if (points != null && points.length == 4 && overlayRect != null) {
             canvas.save();
             canvas.clipRect(overlayRect);
-        }
 
-        // Draw document corners and lines
-        if (points != null && points.length == 4) {
             // Draw lines between corners
             for (int i = 0; i < 4; i++) {
                 PointF start = points[i];
@@ -183,16 +239,14 @@ public class OverlayView extends View {
                 }
             }
 
-            // Draw corner points (circles for better visibility)
+            // Draw corner points
             for (PointF point : points) {
                 if (point != null) {
                     canvas.drawCircle(point.x, point.y, 8f, cornerPaint);
                 }
             }
-        }
 
-        if (overlayRect != null) {
-            canvas.restore();   // remove clip
+            canvas.restore();
         }
     }
 }
