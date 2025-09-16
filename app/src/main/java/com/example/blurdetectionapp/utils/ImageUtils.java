@@ -2,6 +2,7 @@ package com.example.blurdetectionapp.utils;
 
 import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
+import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
 
@@ -45,7 +46,7 @@ public class ImageUtils {
     public static Bitmap rotateBitmap(Bitmap bitmap, int rotationDegrees) {
         if (rotationDegrees == 0) return bitmap;
 
-        android.graphics.Matrix matrix = new android.graphics.Matrix();
+        Matrix matrix = new Matrix();
         matrix.postRotate(rotationDegrees);
 
         return Bitmap.createBitmap(
@@ -57,6 +58,18 @@ public class ImageUtils {
                 true
         );
     }
+    public static Bitmap mirrorHorizontal(Bitmap bitmap) {
+        Matrix matrix = new Matrix();
+        matrix.preScale(-1.0f, 1.0f); // Flip horizontally
+        return Bitmap.createBitmap(
+                bitmap,
+                0, 0,
+                bitmap.getWidth(), bitmap.getHeight(),
+                matrix,
+                false
+        );
+    }
+
 
     public static Bitmap flipBitmap(Bitmap src, boolean horizontal, boolean vertical) {
         android.graphics.Matrix matrix = new android.graphics.Matrix();

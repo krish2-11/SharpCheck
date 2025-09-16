@@ -4,7 +4,6 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.PointF;
 import android.graphics.Rect;
@@ -20,7 +19,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.ExperimentalGetImage;
 import androidx.camera.view.PreviewView;
@@ -28,14 +26,11 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.example.blurdetectionapp.camera.CameraManager;
-import com.example.blurdetectionapp.utils.BlurDetector;
 import com.example.blurdetectionapp.utils.DocumentDetection;
-import com.example.blurdetectionapp.utils.LightingAnalyzer;
+import com.example.blurdetectionapp.utils.ImageUtils;
 import com.example.blurdetectionapp.utils.OverlayView;
-import com.example.blurdetectionapp.utils.ShadowDetection;
 
 import org.opencv.android.OpenCVLoader;
-import org.opencv.core.Mat;
 import org.opencv.core.Point;
 
 import java.util.Objects;
@@ -80,6 +75,7 @@ public class MainActivity extends AppCompatActivity implements
 
     // Captured image
     private Bitmap capturedBitmap;
+    RectF overlayRect = null;
 
     private TextView modeRectangle, modeSquare, modeCard;
 
@@ -161,14 +157,12 @@ public class MainActivity extends AppCompatActivity implements
                 break;
             case "Card":
                 type = OverlayView.OverlayType.LANDSCAPE;
-                break;
         }
 
         // Set overlay without bitmap, just the type for proper sizing
         if (type != null) {
             overlayView.setOverlay(null, type);
-            // ADD THIS LINE - Reset detection when changing modes
-            documentDetection.resetDetection();
+            overlayRect = overlayView.calculateOverlayRect();
         }
 
         Toast.makeText(this, "Mode: " + mode, Toast.LENGTH_SHORT).show();
@@ -208,10 +202,8 @@ public class MainActivity extends AppCompatActivity implements
     // NEW METHOD: Extract ROI bitmap from the overlay area
     private Bitmap extractROIFromFrame(Bitmap frame) {
         if (frame == null || overlayView == null) return null;
-
-        RectF overlayRect = overlayView.getOverlayRect();
         if (overlayRect == null){
-            Toast.makeText(this, "overlay is null", Toast.LENGTH_SHORT).show();
+            Log.e("OverlayRect" , "Its null during extractROIFromFrame");
             return frame;
         } // fallback to full frame
 
@@ -249,6 +241,8 @@ public class MainActivity extends AppCompatActivity implements
                     // Extract ROI before document detection
                     Bitmap roiBitmap = extractROIFromFrame(latestFrame);
                     if (roiBitmap != null) {
+                        roiBitmap = ImageUtils.rotateBitmap(roiBitmap , 180);
+                        //roiBitmap = ImageUtils.mirrorHorizontal(roiBitmap);
                         Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
                         if (corners != null) {
                             // Map corners from ROI space back to overlay view coordinates
@@ -275,26 +269,65 @@ public class MainActivity extends AppCompatActivity implements
 
     // NEW METHOD: Map corners from ROI coordinates to overlay view coordinates
     private PointF[] mapROICornersToOverlay(Point[] corners, Bitmap roiBitmap) {
-        RectF overlayRect = overlayView.getOverlayRect();
         if (overlayRect == null) {
             // Fallback to original mapping method
             return mapPointsToOverlay(corners, roiBitmap.getWidth(), roiBitmap.getHeight(), overlayView);
         }
 
+        // 1) map to overlay co-ords
         PointF[] mapped = new PointF[4];
         for (int i = 0; i < 4; i++) {
-            // Scale corner from ROI bitmap space to overlay rect space
             float x = (float) (corners[i].x * overlayRect.width() / roiBitmap.getWidth());
             float y = (float) (corners[i].y * overlayRect.height() / roiBitmap.getHeight());
-
-            // Translate to overlay rect position
-            mapped[i] = new PointF(
-                    overlayRect.left + x,
-                    overlayRect.top + y
-            );
+            mapped[i] = new PointF(overlayRect.left + x, overlayRect.top + y);
         }
 
-        return expandDocumentCorners(mapped, 1.3f);
+        // 2) expand first (keep existing behavior)
+        mapped = expandDocumentCorners(mapped, 1.2f);
+
+        // 3) compute top & bottom Y of expanded quad
+        float minY = Float.MAX_VALUE;
+        float maxY = Float.MIN_VALUE;
+        for (PointF p : mapped) {
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+
+        float height = maxY - minY;
+        if (height <= 0f) return mapped; // nothing to do
+
+        float shrink = height * 0.1f; // 10%
+
+        // 4) find indices of two largest Y values (bottom-most points)
+        float[] ys = new float[4];
+        for (int i = 0; i < 4; i++) ys[i] = mapped[i].y;
+
+        int maxIdx1 = -1;
+        int maxIdx2 = -1;
+        float maxVal1 = Float.MIN_VALUE;
+        float maxVal2 = Float.MIN_VALUE;
+
+        for (int i = 0; i < 4; i++) {
+            if (ys[i] > maxVal1) {
+                maxVal2 = maxVal1;
+                maxIdx2 = maxIdx1;
+                maxVal1 = ys[i];
+                maxIdx1 = i;
+            } else if (ys[i] > maxVal2) {
+                maxVal2 = ys[i];
+                maxIdx2 = i;
+            }
+        }
+
+        // 5) move only those bottom two points up by 'shrink'
+        if (maxIdx1 >= 0) {
+            mapped[maxIdx1].y = Math.max(mapped[maxIdx1].y - shrink, minY);
+        }
+        if (maxIdx2 >= 0) {
+            mapped[maxIdx2].y = Math.max(mapped[maxIdx2].y - shrink, minY);
+        }
+
+        return mapped;
     }
 
     private PointF[] mapPointsToOverlay(Point[] points, int imgWidth, int imgHeight, View overlayView) {
@@ -323,7 +356,7 @@ public class MainActivity extends AppCompatActivity implements
                     (float) (points[i].y * scale + dy)
             );
         }
-        return expandDocumentCorners(mapped, 1.3f);
+        return expandDocumentCorners(mapped, 0.5f);
     }
 
     private PointF[] expandDocumentCorners(PointF[] corners, float expansionFactor) {
@@ -366,7 +399,7 @@ public class MainActivity extends AppCompatActivity implements
 
         if (cameraManager != null) {
             captureButton.setEnabled(false);
-            captureButton.setText("Capturing...");
+            captureButton.setText("Capturing..");
             cameraManager.captureImage();
         }
     }
@@ -429,24 +462,27 @@ public class MainActivity extends AppCompatActivity implements
             // CHANGE: Extract ROI from captured image for document detection
             Bitmap roiBitmap = extractROIFromFrame(latestFrame != null ? latestFrame : bitmap);
             if (roiBitmap != null) {
-                Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
-                if (corners != null) {
-                    // Warp the document using the full resolution captured image
-                    // but scale the corners appropriately
-                    Point[] scaledCorners = scaleCornersToCapturedImage(corners, roiBitmap, bitmap);
-                    Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, scaledCorners);
-                    imageView2.setImageBitmap(warpedBitmap);
-                } else {
-                    Toast.makeText(this, "No document detected", Toast.LENGTH_SHORT).show();
-                    imageView2.setImageResource(R.drawable.no_document);
-                }
-
-                // Clean up ROI bitmap if different from original
-                if (roiBitmap != bitmap && roiBitmap != latestFrame) {
-                    roiBitmap.recycle();
-                }
+                roiBitmap = ImageUtils.rotateBitmap(roiBitmap , 180);
+//                Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
+//                if (corners != null) {
+//                    // Warp the document using the full resolution captured image
+//                    // but scale the corners appropriately
+//                    Point[] scaledCorners = scaleCornersToCapturedImage(corners, roiBitmap, bitmap); // shrink bottom by 10%
+//                    scaledCorners = shrinkBottomCorners(scaledCorners, 0.1);
+//                    Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, scaledCorners);
+//                    imageView2.setImageBitmap(warpedBitmap);
+//                } else {
+//                    Toast.makeText(this, "No document detected", Toast.LENGTH_SHORT).show();
+//                    imageView2.setImageResource(R.drawable.no_document);
+//                }
+//
+//                // Clean up ROI bitmap if different from original
+//                if (roiBitmap != bitmap && roiBitmap != latestFrame) {
+//                    roiBitmap.recycle();
+//                }
+                roiBitmap = documentDetection.outputCheck(roiBitmap);
+                imageView2.setImageBitmap(roiBitmap);
             }
-
             showResultsView();
 
 //            if (currentLightingResult != null) {
@@ -463,8 +499,6 @@ public class MainActivity extends AppCompatActivity implements
         if (latestFrame == null || overlayView == null) {
             return roiCorners; // fallback
         }
-
-        RectF overlayRect = overlayView.getOverlayRect();
         if (overlayRect == null) {
             return roiCorners; // fallback
         }
@@ -486,7 +520,6 @@ public class MainActivity extends AppCompatActivity implements
                     capturedROI.top + y
             );
         }
-
         return scaledCorners;
     }
 
@@ -517,6 +550,44 @@ public class MainActivity extends AppCompatActivity implements
 
         return new Rect(left, top, right, bottom);
     }
+
+    private Point[] shrinkBottomCorners(Point[] corners, double shrinkFactor) {
+        if (corners == null || corners.length < 4) return corners;
+
+        // Find min and max Y
+        double minY = Double.MAX_VALUE;
+        double maxY = Double.MIN_VALUE;
+        for (Point p : corners) {
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+        double height = maxY - minY;
+        if (height <= 0) return corners;
+
+        double shrink = height * shrinkFactor; // e.g. 0.1 = shrink by 10%
+
+        // Find two bottom-most points
+        int idx1 = -1, idx2 = -1;
+        double max1 = Double.MIN_VALUE, max2 = Double.MIN_VALUE;
+        for (int i = 0; i < corners.length; i++) {
+            if (corners[i].y > max1) {
+                max2 = max1;
+                idx2 = idx1;
+                max1 = corners[i].y;
+                idx1 = i;
+            } else if (corners[i].y > max2) {
+                max2 = corners[i].y;
+                idx2 = i;
+            }
+        }
+
+        // Move bottom two upward
+        if (idx1 >= 0) corners[idx1].y = Math.max(corners[idx1].y - shrink, minY);
+        if (idx2 >= 0) corners[idx2].y = Math.max(corners[idx2].y - shrink, minY);
+
+        return corners;
+    }
+
 
     @Override
     public void onCaptureError(String error) {
