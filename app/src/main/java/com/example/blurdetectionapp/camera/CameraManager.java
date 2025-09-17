@@ -286,10 +286,10 @@ public class CameraManager {
                 }
             }
 
-            /* COMMENTED OUT - LIGHTING ANALYSIS
             // Lighting analysis on ROI
                 if (lightingCallback != null) {
-                    Mat lightingMat = roiBitmap != null ? extractROIFromMat(mat) : mat.clone();
+                    Mat lightingMat = roiMat != null ? extractROIFromMat(mat) : mat.clone();
+//                    Mat lightingMat = roiMat != null ? roiMat : mat.clone();
                     cameraExecutor.execute(() -> {
                         LightingAnalyzer.LightingAnalysisResult result =
                                 LightingAnalyzer.analyzeLighting(lightingMat);
@@ -299,12 +299,12 @@ public class CameraManager {
                         );
                     });
                 }
-            */
 
-            /* COMMENTED OUT - BLUR ANALYSIS
+
             // Blur analysis on ROI
             if (blurCallback != null) {
-                Mat blurMat = roiBitmap != null ? extractROIFromMat(mat) : mat.clone();
+                Mat blurMat = roiMat != null ? extractROIFromMat(mat) : mat.clone();
+//                Mat blurMat = roiMat != null ? roiMat : mat.clone();
                 cameraExecutor.execute(() -> {
                     BlurDetector.BlurDetectionResult result =
                             BlurDetector.detectBlurAndOcclusion(blurMat);
@@ -314,7 +314,7 @@ public class CameraManager {
                     );
                 });
             }
-            */
+
 
             // Clean up
             if (roiMat != mat) {

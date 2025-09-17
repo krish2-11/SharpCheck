@@ -42,9 +42,9 @@ import java.util.Objects;
 
 @ExperimentalGetImage
 public class MainActivity extends AppCompatActivity implements
-//        CameraManager.LightingAnalysisCallback,
-        CameraManager.ImageCaptureCallback {
-//        CameraManager.BlurAnalysisCallback {
+        CameraManager.LightingAnalysisCallback,
+        CameraManager.ImageCaptureCallback,
+        CameraManager.BlurAnalysisCallback {
 
     private static final String TAG = "MainActivity";
     private static final int CAMERA_PERMISSION_CODE = 200;
@@ -61,6 +61,9 @@ public class MainActivity extends AppCompatActivity implements
     private TextView resultText;
     private View resultsPanel;
     private OverlayView overlayView;
+    private TextView lightingBlurStatusText;
+    private TextView lightingBlurDetailText;
+    private ImageView star1, star2, star3;
 
     private DocumentDetection documentDetection;
 
@@ -69,8 +72,8 @@ public class MainActivity extends AppCompatActivity implements
     private Handler mainHandler;
 
     // Current analysis results
-//    private LightingAnalyzer.LightingAnalysisResult currentLightingResult;
-//    private BlurDetector.BlurDetectionResult currentBlurResult;
+    private LightingAnalyzer.LightingAnalysisResult currentLightingResult;
+    private BlurDetector.BlurDetectionResult currentBlurResult;
 
     // Document detection loop
     private final Handler cornerHandler = new Handler(Looper.getMainLooper());
@@ -120,7 +123,14 @@ public class MainActivity extends AppCompatActivity implements
         resultsPanel = findViewById(R.id.resultsPanel);
         imageView = findViewById(R.id.imageView);
         imageView2 = findViewById(R.id.imageView2);
-        resultText = findViewById(R.id.resultText);
+//        resultText = findViewById(R.id.resultText);
+
+        lightingBlurStatusText = findViewById(R.id.lightingBlurStatusText);
+        lightingBlurDetailText = findViewById(R.id.lightingBlurDetailText);
+        star1 = findViewById(R.id.star1);
+        star2 = findViewById(R.id.star2);
+        star3 = findViewById(R.id.star3);
+
 
         modeRectangle=findViewById(R.id.modeRectangle);
         modeSquare=findViewById(R.id.modeSquare);
@@ -142,12 +152,12 @@ public class MainActivity extends AppCompatActivity implements
         toggleResultsButton.setOnClickListener(v -> toggleResultsView());
         backToCameraButton.setOnClickListener(v -> backToCameraView());
 
-//        captureButton.setEnabled(false);
-        captureButton.setEnabled(true);
+        captureButton.setEnabled(false);
+//        captureButton.setEnabled(true);
         documentDetection = new DocumentDetection();
 
-//        updateCaptureButtonState(false);
-        updateCaptureButtonState(true);
+        updateCaptureButtonState(false);
+//        updateCaptureButtonState(true);
     }
 
     private void onModeChanged(String mode) {
@@ -171,7 +181,7 @@ public class MainActivity extends AppCompatActivity implements
             documentDetection.resetDetection();
         }
 
-        Toast.makeText(this, "Mode: " + mode, Toast.LENGTH_SHORT).show();
+//        Toast.makeText(this, "Mode: " + mode, Toast.LENGTH_SHORT).show();
     }
 
     private void highlightSelected(TextView selected) {
@@ -186,7 +196,7 @@ public class MainActivity extends AppCompatActivity implements
 
     private void initializeCamera() {
         cameraManager = new CameraManager(this, this);
-        cameraManager.initializeCamera(previewView, null, null, this);
+        cameraManager.initializeCamera(previewView, this, this, this);
         setFrameAnalyzerCallback(this::processFrame);
         cameraManager.setOverlayView(overlayView);
         startCornerDetectionLoop();
@@ -390,18 +400,21 @@ public class MainActivity extends AppCompatActivity implements
 //                .show();
 //    }
 
-//    @Override
-//    public void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result) {
+    @Override
+    public void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result) {
 //        currentLightingResult = result;
 //        mainHandler.post(() -> {
-//            lightingStatusText.setText(result.statusMessage);
-//            lightingDetailText.setText(result.detailMessage);
+////            lightingStatusText.setText(result.statusMessage);
+////            lightingDetailText.setText(result.detailMessage);
 //
 //            boolean canCapture = result.isCaptureEnabled
 //                    && (currentBlurResult == null || !currentBlurResult.isBlurred);
 //            updateCaptureButtonState(canCapture);
 //        });
-//    }
+
+        currentLightingResult = result;
+        mainHandler.post(this::updateStarRatingAndStatus);
+    }
 
 //    private String generateLightingIssueExplanation(LightingAnalyzer.LightingAnalysisResult result) {
 //        StringBuilder explanation = new StringBuilder();
@@ -449,12 +462,12 @@ public class MainActivity extends AppCompatActivity implements
 
             showResultsView();
 
-//            if (currentLightingResult != null) {
-//                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
-//            } else {
-//                updateCaptureButtonState(false);
-//            }
-            updateCaptureButtonState(true);
+            if (currentLightingResult != null) {
+                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
+            } else {
+                updateCaptureButtonState(false);
+            }
+//            updateCaptureButtonState(true);
         });
     }
 
@@ -522,12 +535,12 @@ public class MainActivity extends AppCompatActivity implements
     public void onCaptureError(String error) {
         mainHandler.post(() -> {
             Toast.makeText(this, "Capture failed: " + error, Toast.LENGTH_SHORT).show();
-//            if (currentLightingResult != null) {
-//                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
-//            } else {
-//                updateCaptureButtonState(false);
-//            }
-            updateCaptureButtonState(true);
+            if (currentLightingResult != null) {
+                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
+            } else {
+                updateCaptureButtonState(false);
+            }
+//            updateCaptureButtonState(true);
         });
     }
 
@@ -608,19 +621,91 @@ public class MainActivity extends AppCompatActivity implements
         // Camera will be resumed automatically by lifecycle
     }
 
-//    @Override
-//    public void onBlurAnalyzed(BlurDetector.BlurDetectionResult result) {
+    @Override
+    public void onBlurAnalyzed(BlurDetector.BlurDetectionResult result) {
 //        currentBlurResult = result;
 //        mainHandler.post(() -> {
 //            @SuppressLint("DefaultLocale")
-//            String blurMessage = String.format("Blur: %b, Occluded: %b, AvgVariance: %.1f, BlurPct: %.3f, OcclusionPct: %.3f)",
-//                    result.isBlurred, result.isOccluded,  result.avgVariance, result.blurPercentage, result.occlusionPercentage);
+////            String blurMessage = String.format("Blur: %b, Occluded: %b, AvgVariance: %.1f, BlurPct: %.3f, OcclusionPct: %.3f)",
+////                    result.isBlurred, result.isOccluded,  result.avgVariance, result.blurPercentage, result.occlusionPercentage);
 //
-//            blurStatusText.setText(blurMessage);
+////            blurStatusText.setText(blurMessage);
 //
 //            boolean canCapture = (currentLightingResult != null && currentLightingResult.isCaptureEnabled)
 //                    && !result.isBlurred;
 //            updateCaptureButtonState(canCapture);
 //        });
-//    }
+        currentBlurResult = result;
+        mainHandler.post(this::updateStarRatingAndStatus);
+    }
+
+    private void updateStarRatingAndStatus() {
+        if (currentLightingResult == null || currentBlurResult == null) {
+            lightingBlurStatusText.setText("Analyzing...");
+            lightingBlurDetailText.setText("");
+            setStars(0);
+            updateCaptureButtonState(false);
+            return;
+        }
+
+        // Determine overall quality score (example logic)
+        int stars = 3; // max stars
+
+        // Deduct stars for bad lighting
+        if (currentLightingResult.lightingCondition == LightingAnalyzer.LightingCondition.BAD) {
+            stars = Math.min(stars, 1);
+        } else if (currentLightingResult.lightingCondition == LightingAnalyzer.LightingCondition.GOOD) {
+            stars = Math.min(stars, 2);
+        }
+
+        // Deduct stars for blur
+        if (currentBlurResult.isBlurred) {
+            stars = Math.min(stars, 1);
+        } else if (currentBlurResult.blurPercentage > 0.1) { // example threshold
+            stars = Math.min(stars, 2);
+        }
+
+        // Update star images
+        setStars(stars);
+
+        // Update status text
+        String statusText;
+        switch (stars) {
+            case 3:
+                statusText = "Excellent Image Quality";
+                break;
+            case 2:
+                statusText = "Good Image Quality";
+                break;
+            case 1:
+                statusText = "Poor Image Quality";
+                break;
+            default:
+                statusText = "Analyzing...";
+        }
+        lightingBlurStatusText.setText(statusText);
+
+        // Optionally show details from lighting and blur
+        String detail = "";
+        if (currentLightingResult.hasReflection) {
+            detail += "Reflection detected. ";
+        }
+        if (currentLightingResult.brightPixelRatio >= 0.55) {
+            detail += "Overexposed. ";
+        }
+        if (currentBlurResult.isBlurred) {
+            detail += "Image is blurry. ";
+        }
+        lightingBlurDetailText.setText(detail.trim());
+
+        // Enable capture only if stars >= 2
+        updateCaptureButtonState(stars >= 2);
+    }
+
+    private void setStars(int count) {
+        star1.setImageResource(count >= 1 ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
+        star2.setImageResource(count >= 2 ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
+        star3.setImageResource(count >= 3 ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
+    }
+
 }
