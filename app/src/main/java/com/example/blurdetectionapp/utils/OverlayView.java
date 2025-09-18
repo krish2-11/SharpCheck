@@ -13,6 +13,7 @@ import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.View;
 
 import androidx.annotation.NonNull;
@@ -31,16 +32,12 @@ public class OverlayView extends View {
     private Paint shadowPaint;
     private Paint overlayPaint;
     private Paint clearPaint;
+    private Paint borderPaint;
 
-    private RectF overlayRect;
+    private RectF overlayRect = null;
 
-    // NEW: Make overlayRect publicly accessible for ROI extraction
     public RectF getOverlayRect() {
-        calculateOverlayRect();
-        if (overlayRect != null) {
-            return new RectF(overlayRect);
-        }
-        return null;
+        return overlayRect;
     }
 
 
@@ -88,6 +85,12 @@ public class OverlayView extends View {
         clearPaint = new Paint();
         clearPaint.setAntiAlias(true);
         clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+
+        borderPaint = new Paint();
+        borderPaint.setColor(Color.YELLOW);
+        borderPaint.setStyle(Paint.Style.STROKE);
+        borderPaint.setStrokeWidth(3f);
+        borderPaint.setAntiAlias(true);
     }
 
     public void setPoints(PointF[] points) {
@@ -116,14 +119,15 @@ public class OverlayView extends View {
         invalidate();
     }
 
-    private void calculateOverlayRect() {
+    public RectF calculateOverlayRect() {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
 
         if (viewWidth == 0 || viewHeight == 0) {
             // View not measured yet, will be called again in onDraw
+            Log.e("calculateOverlayRect","Get Width And Height");
             overlayRect = null;
-            return;
+            return null;
         }
 
         float centerX = viewWidth / 2f;
@@ -179,6 +183,7 @@ public class OverlayView extends View {
                 );
                 break;
         }
+        return overlayRect;
     }
 
     @Override
@@ -209,19 +214,28 @@ public class OverlayView extends View {
         }
 
         // Create the overlay effect: darken everything except the capture area
+//        if (overlayRect != null) {
+//            // Draw semi-transparent overlay over entire view
+//            canvas.drawRect(0, 0, getWidth(), getHeight(), overlayPaint);
+//
+//            // Clear the capture area to make it fully visible
+//            canvas.drawRoundRect(overlayRect, 20f, 20f, clearPaint);
+//
+//            // Optional: Draw a subtle border around the capture area
+//            @SuppressLint("DrawAllocation") Paint borderPaint = new Paint();
+//            borderPaint.setColor(Color.YELLOW);
+//            borderPaint.setStyle(Paint.Style.STROKE);
+//            borderPaint.setStrokeWidth(3f);
+//            borderPaint.setAntiAlias(true);
+//            canvas.drawRoundRect(overlayRect, 20f, 20f, borderPaint);
+//        }
+
         if (overlayRect != null) {
             // Draw semi-transparent overlay over entire view
             canvas.drawRect(0, 0, getWidth(), getHeight(), overlayPaint);
-
             // Clear the capture area to make it fully visible
             canvas.drawRoundRect(overlayRect, 20f, 20f, clearPaint);
-
-            // Optional: Draw a subtle border around the capture area
-            Paint borderPaint = new Paint();
-            borderPaint.setColor(Color.WHITE);
-            borderPaint.setStyle(Paint.Style.STROKE);
-            borderPaint.setStrokeWidth(3f);
-            borderPaint.setAntiAlias(true);
+            // Draw border around capture area
             canvas.drawRoundRect(overlayRect, 20f, 20f, borderPaint);
         }
 

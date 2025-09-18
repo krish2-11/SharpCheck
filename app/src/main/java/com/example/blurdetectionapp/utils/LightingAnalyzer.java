@@ -14,8 +14,8 @@ public class LightingAnalyzer {
     private static final String TAG = "LightingAnalyzer";
 
     // Relaxed thresholds for less sensitivity
-    private static final double BRIGHT_PIXEL_RATIO_BAD = 0.4;       // 40% very bright pixels bad
-    private static final double BRIGHT_PIXEL_RATIO_GOOD = 0.25;     // 25% bright pixels warning
+    private static final double BRIGHT_PIXEL_RATIO_BAD = 0.55;       // 40% very bright pixels bad
+    private static final double BRIGHT_PIXEL_RATIO_GOOD = 0.40;     // 25% bright pixels warning
 
     private static final double LAPLACIAN_VAR_THRESHOLD_BAD = 50.0; // Lower threshold - less strict
     private static final double LAPLACIAN_VAR_THRESHOLD_GOOD = 80.0;

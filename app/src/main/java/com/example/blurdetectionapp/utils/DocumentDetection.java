@@ -26,16 +26,42 @@ public class DocumentDetection {
         Mat grayMat = new Mat();
         Imgproc.cvtColor(mat, grayMat, Imgproc.COLOR_RGBA2GRAY);
 
-        // 2️⃣ Gaussian blur to reduce noise
-        Imgproc.GaussianBlur(grayMat, grayMat, new Size(5, 5), 0);
+        // 2️⃣ Remove background by thresholding
+        Mat mask = new Mat();
+        Imgproc.threshold(
+                grayMat,               // input gray image
+                mask,                   // output binary mask
+                0,                      // threshold value (ignored with Outs)
+                255,                     // max value
+                Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU
+        );
+        // 3️⃣ Keep only the document (white areas in mask)
+        Mat foreground = new Mat();
+        mat.copyTo(foreground, mask);
+
+        Imgproc.GaussianBlur(foreground, foreground, new Size(5, 5), 0);
+        Mat dst = new Mat();
+
+        // Define a sharpening kernel
+        Mat kernel = new Mat(3, 3, CvType.CV_32F);
+        float[] data = {
+                0, -1,  0,
+                -1,  5, -1,
+                0, -1,  0
+        };
+        kernel.put(0, 0, data);
+
+        // Apply the filter
+        Imgproc.filter2D(foreground, dst, foreground.depth(), kernel);
+
+        Imgproc.GaussianBlur(dst, dst, new Size(5, 5), 0);
 
         // 3️⃣ Canny edge detection
         Mat edges = new Mat();
-        Imgproc.Canny(grayMat, edges, 50, 150); // Adjust thresholds if needed
+        Imgproc.Canny(dst, edges, 150, 200); // Adjust thresholds if needed
 
-        // 4️⃣ Morphological close to connect edges
-        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
-        Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel);
+        Mat kernel2 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
+        Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel2);
 
         // 5️⃣ Find contours
         List<MatOfPoint> contours = new ArrayList<>();
@@ -81,8 +107,48 @@ public class DocumentDetection {
                 return sorted;
             }
         }
-
         return null;
+    }
+
+    public Bitmap outputCheck(Bitmap bitmap){
+        Mat mat = new Mat();
+        Utils.bitmapToMat(bitmap, mat);
+
+        Mat grayMat = new Mat();
+        Imgproc.cvtColor(mat, grayMat, Imgproc.COLOR_RGBA2GRAY);
+
+        // Apply Gaussian blur
+        Mat blurred = new Mat();
+        Imgproc.GaussianBlur(grayMat, blurred, new Size(5, 5), 0);
+
+        // Compute gradients
+        Mat gradX = new Mat(), gradY = new Mat();
+        Imgproc.Sobel(blurred, gradX, CvType.CV_32F, 1, 0, 3);
+        Imgproc.Sobel(blurred, gradY, CvType.CV_32F, 0, 1, 3);
+
+        // Compute gradient magnitude
+        Mat magnitude = new Mat();
+        Mat gradX2 = new Mat(), gradY2 = new Mat();
+        Core.multiply(gradX, gradX, gradX2);
+        Core.multiply(gradY, gradY, gradY2);
+        Core.add(gradX2, gradY2, magnitude);
+        Core.sqrt(magnitude, magnitude);
+
+        // Normalize and convert to 8-bit
+        Mat normalizedMag = new Mat();
+        Core.normalize(magnitude, normalizedMag, 0, 255, Core.NORM_MINMAX, CvType.CV_8U);
+
+        // Apply threshold to get strong edges
+        Mat strongEdges = new Mat();
+        Imgproc.threshold(normalizedMag, strongEdges, 50, 255, Imgproc.THRESH_BINARY);
+
+        // Morphological operations to connect edges
+        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3));
+        Imgproc.morphologyEx(strongEdges, strongEdges, Imgproc.MORPH_CLOSE, kernel);
+
+        Bitmap outputBitmap = Bitmap.createBitmap(strongEdges.cols(), strongEdges.rows(), Bitmap.Config.ARGB_8888);
+        Utils.matToBitmap(strongEdges, outputBitmap);
+        return outputBitmap;
     }
 
     /**
@@ -126,7 +192,6 @@ public class DocumentDetection {
     }
 
     // --- Utility helpers ---
-
     private Point[] sortCorners(Point[] pts) {
         Arrays.sort(pts, Comparator.comparingDouble(p -> p.y)); // top->bottom
         Point[] top = Arrays.copyOfRange(pts, 0, 2);
@@ -151,11 +216,5 @@ public class DocumentDetection {
             smoothed[i] = new Point(x, y);
         }
         return smoothed;
-    }
-
-    public void resetDetection() {
-        lastCorners = null;
-//        framesWithoutDetection = 0;
-        Log.d(TAG, "Detection reset");
     }
 }

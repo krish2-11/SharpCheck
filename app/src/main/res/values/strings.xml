@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">SharpCheck</string>
+    <string name="original_image">Original Image</string>
+    <string name="document_detection_result">Document Detection Result</string>
 </resources>
