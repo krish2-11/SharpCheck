@@ -32,6 +32,7 @@ public class OverlayView extends View {
     private Paint shadowPaint;
     private Paint overlayPaint;
     private Paint clearPaint;
+    private Paint borderPaint;
 
     private RectF overlayRect = null;
 
@@ -84,6 +85,12 @@ public class OverlayView extends View {
         clearPaint = new Paint();
         clearPaint.setAntiAlias(true);
         clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+
+        borderPaint = new Paint();
+        borderPaint.setColor(Color.YELLOW);
+        borderPaint.setStyle(Paint.Style.STROKE);
+        borderPaint.setStrokeWidth(3f);
+        borderPaint.setAntiAlias(true);
     }
 
     public void setPoints(PointF[] points) {
@@ -108,7 +115,7 @@ public class OverlayView extends View {
 
     public void setOverlay(Bitmap bitmap, OverlayType type) {
         this.overlayType = type;
-        //calculateOverlayRect();
+        calculateOverlayRect();
         invalidate();
     }
 
@@ -182,7 +189,7 @@ public class OverlayView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        //calculateOverlayRect();
+        calculateOverlayRect();
     }
 
     @Override
@@ -191,7 +198,7 @@ public class OverlayView extends View {
 
         // Calculate overlay rect if not already calculated
         if (overlayRect == null) {
-            //calculateOverlayRect();
+            calculateOverlayRect();
         }
 
         // Draw shadow mask first (if exists) - only within overlay area
@@ -207,19 +214,28 @@ public class OverlayView extends View {
         }
 
         // Create the overlay effect: darken everything except the capture area
+//        if (overlayRect != null) {
+//            // Draw semi-transparent overlay over entire view
+//            canvas.drawRect(0, 0, getWidth(), getHeight(), overlayPaint);
+//
+//            // Clear the capture area to make it fully visible
+//            canvas.drawRoundRect(overlayRect, 20f, 20f, clearPaint);
+//
+//            // Optional: Draw a subtle border around the capture area
+//            @SuppressLint("DrawAllocation") Paint borderPaint = new Paint();
+//            borderPaint.setColor(Color.YELLOW);
+//            borderPaint.setStyle(Paint.Style.STROKE);
+//            borderPaint.setStrokeWidth(3f);
+//            borderPaint.setAntiAlias(true);
+//            canvas.drawRoundRect(overlayRect, 20f, 20f, borderPaint);
+//        }
+
         if (overlayRect != null) {
             // Draw semi-transparent overlay over entire view
             canvas.drawRect(0, 0, getWidth(), getHeight(), overlayPaint);
-
             // Clear the capture area to make it fully visible
             canvas.drawRoundRect(overlayRect, 20f, 20f, clearPaint);
-
-            // Optional: Draw a subtle border around the capture area
-            @SuppressLint("DrawAllocation") Paint borderPaint = new Paint();
-            borderPaint.setColor(Color.YELLOW);
-            borderPaint.setStyle(Paint.Style.STROKE);
-            borderPaint.setStrokeWidth(3f);
-            borderPaint.setAntiAlias(true);
+            // Draw border around capture area
             canvas.drawRoundRect(overlayRect, 20f, 20f, borderPaint);
         }
 
