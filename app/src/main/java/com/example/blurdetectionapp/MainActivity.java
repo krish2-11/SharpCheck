@@ -507,7 +507,7 @@ public class MainActivity extends AppCompatActivity implements
         float height = maxY - minY;
         if (height <= 0) return corners;
 
-        float shrink = height * 0.15f; // e.g. 0.15 = shrink by 15%
+        float shrink = height * 0.05f; // e.g. 0.05 = shrink by 5%
 
         // Find two bottom-most points
         int idx1 = -1, idx2 = -1;
