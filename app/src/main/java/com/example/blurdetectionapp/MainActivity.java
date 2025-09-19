@@ -31,9 +31,13 @@ import com.example.blurdetectionapp.utils.DocumentDetection;
 import com.example.blurdetectionapp.utils.ImageUtils;
 import com.example.blurdetectionapp.utils.LightingAnalyzer;
 import com.example.blurdetectionapp.utils.OverlayView;
+import com.example.blurdetectionapp.utils.ShadowDetector;
 
 import org.opencv.android.OpenCVLoader;
+import org.opencv.android.Utils;
+import org.opencv.core.Mat;
 import org.opencv.core.Point;
+import org.opencv.imgproc.Imgproc;
 
 import java.util.Objects;
 
@@ -41,7 +45,8 @@ import java.util.Objects;
 public class MainActivity extends AppCompatActivity implements
         CameraManager.LightingAnalysisCallback,
         CameraManager.ImageCaptureCallback,
-        CameraManager.BlurAnalysisCallback {
+        CameraManager.BlurAnalysisCallback,
+        CameraManager.ShadowDetectionCallback{
 
     private static final String TAG = "MainActivity";
     private static final int CAMERA_PERMISSION_CODE = 200;
@@ -50,6 +55,8 @@ public class MainActivity extends AppCompatActivity implements
     private PreviewView previewView;
     private TextView lightingStatusText;
     private TextView lightingDetailText;
+
+    private ImageView shadowMaskView;
     private TextView blurStatusText;
     private Button captureButton;
     private Button toggleResultsButton;
@@ -81,6 +88,8 @@ public class MainActivity extends AppCompatActivity implements
     // Captured image
     private Bitmap capturedBitmap;
     RectF overlayRect = null;
+
+    private ShadowDetector.ShadowDetectionResult currentShadowResult;
 
     private TextView modeRectangle, modeSquare, modeCard;
 
@@ -129,6 +138,7 @@ public class MainActivity extends AppCompatActivity implements
         star2 = findViewById(R.id.star2);
         star3 = findViewById(R.id.star3);
 
+        shadowMaskView = findViewById(R.id.shadowMaskView);
 
         modeRectangle=findViewById(R.id.modeRectangle);
         modeSquare=findViewById(R.id.modeSquare);
@@ -196,6 +206,7 @@ public class MainActivity extends AppCompatActivity implements
     private void initializeCamera() {
         cameraManager = new CameraManager(this, this);
         cameraManager.initializeCamera(previewView, this, this, this);
+        cameraManager.setShadowDetectionCallback(this);
         setFrameAnalyzerCallback(this::processFrame);
         cameraManager.setOverlayView(overlayView);
         startCornerDetectionLoop();
@@ -474,6 +485,24 @@ public class MainActivity extends AppCompatActivity implements
 //    }
 
     @Override
+    public void onShadowDetected(ShadowDetector.ShadowDetectionResult result) {
+        currentShadowResult = result; // Store for quality rating
+        if (result == null || result.shadowMask == null) return;
+        double shadowRatio = result.getShadowRatio();
+        mainHandler.post(() -> {
+            // Convert shadow mask Mat to Bitmap and display
+            Bitmap maskBitmap = matToMaskBitmap(result.shadowMask);
+            if (maskBitmap != null) {
+                shadowMaskView.setImageBitmap(maskBitmap);
+            } else {
+                shadowMaskView.setImageBitmap(null);
+            }
+            // Trigger quality update if needed
+            updateStarRatingAndStatus();
+        });
+    }
+
+    @Override
     public void onImageCaptured(Bitmap bitmap) {
         capturedBitmap = bitmap;
 
@@ -744,6 +773,11 @@ public class MainActivity extends AppCompatActivity implements
             stars = Math.min(stars, 2);
         }
 
+        // Consider shadow coverage for quality rating
+        if (currentShadowResult != null && currentShadowResult.getShadowRatio() > 0.15) { // More than 15% shadow coverage
+            stars = Math.min(stars, 2);
+        }
+
         // Update star images
         setStars(stars);
 
@@ -786,5 +820,49 @@ public class MainActivity extends AppCompatActivity implements
         star2.setImageResource(count >= 2 ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
         star3.setImageResource(count >= 3 ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
     }
+
+    private Bitmap matToMaskBitmap(Mat maskMat) {
+        if (maskMat == null || maskMat.empty()) return null;
+
+        try {
+            // Create a colored shadow overlay
+            Mat rgba = new Mat();
+            Imgproc.cvtColor(maskMat, rgba, Imgproc.COLOR_GRAY2RGBA);
+
+            Bitmap bmp = Bitmap.createBitmap(rgba.cols(), rgba.rows(), Bitmap.Config.ARGB_8888);
+            Utils.matToBitmap(rgba, bmp);
+
+            // Create a rotated bitmap to match camera orientation
+            android.graphics.Matrix matrix = new android.graphics.Matrix();
+            matrix.postRotate(180); // Match the 180-degree rotation applied to frames
+            Bitmap rotatedBmp = Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), matrix, true);
+
+            // Make shadow areas semi-transparent red for better visibility
+            int width = rotatedBmp.getWidth();
+            int height = rotatedBmp.getHeight();
+            int[] pixels = new int[width * height];
+            rotatedBmp.getPixels(pixels, 0, width, 0, 0, width, height);
+
+            for (int i = 0; i < pixels.length; i++) {
+                int color = pixels[i];
+                int alpha = (color & 0xFF); // grayscale value (0 or 255)
+                if (alpha == 0) {
+                    pixels[i] = 0x00000000; // fully transparent
+                } else {
+                    pixels[i] = 0x88FF4444; // semi-transparent red for shadow areas
+                }
+            }
+
+            rotatedBmp.setPixels(pixels, 0, width, 0, 0, width, height);
+
+            bmp.recycle(); // Clean up original bitmap
+            rgba.release();
+            return rotatedBmp;
+        } catch (Exception e) {
+            Log.e(TAG, "Error converting shadow mask Mat to Bitmap", e);
+            return null;
+        }
+    }
+
 
 }

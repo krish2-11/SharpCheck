@@ -29,6 +29,7 @@ import androidx.lifecycle.LifecycleOwner;
 import com.example.blurdetectionapp.utils.BlurDetector;
 import com.example.blurdetectionapp.utils.LightingAnalyzer;
 import com.example.blurdetectionapp.utils.OverlayView;
+import com.example.blurdetectionapp.utils.ShadowDetector;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import org.opencv.android.Utils;
@@ -71,6 +72,7 @@ public class CameraManager {
     private BlurAnalysisCallback blurCallback;
     private ImageCaptureCallback captureCallback;
     private FrameCallback frameCallback;
+    private ShadowDetectionCallback shadowCallback;
 
     // Callback Interfaces
     public interface LightingAnalysisCallback {
@@ -80,6 +82,11 @@ public class CameraManager {
     public interface BlurAnalysisCallback {
         void onBlurAnalyzed(BlurDetector.BlurDetectionResult result);
     }
+
+    public interface ShadowDetectionCallback {
+        void onShadowDetected(ShadowDetector.ShadowDetectionResult result);
+    }
+
 
     public interface ImageCaptureCallback {
         void onImageCaptured(Bitmap bitmap);
@@ -108,6 +115,10 @@ public class CameraManager {
      */
     public void setFrameCallback(FrameCallback callback) {
         this.frameCallback = callback;
+    }
+
+    public void setShadowDetectionCallback(ShadowDetectionCallback callback) {
+        this.shadowCallback = callback;
     }
 
     /**
@@ -249,6 +260,9 @@ public class CameraManager {
         private long lastAnalysisTime = 0;
         private static final long ANALYSIS_INTERVAL = 500; // ms
 
+        private long lastShadowAnalysisTime = 0;
+        private static final long SHADOW_ANALYSIS_INTERVAL = 1000; // ms - slower for shadows
+
         @Override
         public void analyze(@NonNull ImageProxy image) {
             long currentTime = System.currentTimeMillis();
@@ -311,6 +325,19 @@ public class CameraManager {
                     blurMat.release();
                     ContextCompat.getMainExecutor(context).execute(() ->
                             blurCallback.onBlurAnalyzed(result)
+                    );
+                });
+            }
+
+            // Shadow analysis on ROI (throttled more aggressively)
+            if (shadowCallback != null && (currentTime - lastShadowAnalysisTime > SHADOW_ANALYSIS_INTERVAL)) {
+                lastShadowAnalysisTime = currentTime;
+                Mat shadowMat = roiMat != null ? extractROIFromMat(mat) : mat.clone();
+                cameraExecutor.execute(() -> {
+                    ShadowDetector.ShadowDetectionResult shadowResult = ShadowDetector.detectShadowsFast(shadowMat);
+                    shadowMat.release();
+                    ContextCompat.getMainExecutor(context).execute(() ->
+                            shadowCallback.onShadowDetected(shadowResult)
                     );
                 });
             }
