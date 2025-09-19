@@ -56,7 +56,7 @@ public class DocumentDetection {
 
         // 3️⃣ Canny edge detection
         Mat edges = new Mat();
-        Imgproc.Canny(dst, edges, 50, 150); // Adjust thresholds if needed
+        Imgproc.Canny(dst, edges, 25, 150);
 
         Mat kernel2 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
         Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel2);
@@ -118,12 +118,14 @@ public class DocumentDetection {
 
         //Remove background by thresholding
         Mat mask = new Mat();
-        Imgproc.threshold(
-                grayMat,               // input gray image
-                mask,                   // output binary mask
-                0,                      // threshold value (ignored with Outs)
-                255,                     // max value
-                Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU
+        Imgproc.adaptiveThreshold(
+                grayMat,                           // input
+                mask,                              // output
+                255,                               // max value
+                Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, // adaptive method
+                Imgproc.THRESH_BINARY,             // threshold type
+                11,                                // block size
+                2                                  // C constant
         );
         // 3️⃣ Keep only the document (white areas in mask)
         Mat foreground = new Mat();
@@ -148,7 +150,7 @@ public class DocumentDetection {
 
         // 3️⃣ Canny edge detection
         Mat edges = new Mat();
-        Imgproc.Canny(dst, edges, 50, 150); // Adjust thresholds if needed
+        Imgproc.Canny(dst, edges, 0, 150); // Adjust thresholds if needed
 
         Mat kernel2 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
         Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel2);
@@ -158,9 +160,7 @@ public class DocumentDetection {
         return outputBitmap;
     }
 
-    /**
-     * Warp image using detected corners
-     */
+    /* Warp image using detected corners */
     public Bitmap warpToDocumentFromPoints(Bitmap bitmap, Point[] points) {
         Mat src = new Mat();
         Utils.bitmapToMat(bitmap, src);

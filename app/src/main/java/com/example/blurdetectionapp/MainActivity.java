@@ -48,14 +48,10 @@ public class MainActivity extends AppCompatActivity implements
 
     // UI Components
     private PreviewView previewView;
-    private TextView lightingStatusText;
-    private TextView lightingDetailText;
-    private TextView blurStatusText;
     private Button captureButton;
     private Button toggleResultsButton;
     private ImageView imageView;
     private ImageView imageView2;
-    private TextView resultText;
     private View resultsPanel;
     private OverlayView overlayView;
     private TextView lightingBlurStatusText;
@@ -110,9 +106,6 @@ public class MainActivity extends AppCompatActivity implements
 
     private void initializeViews() {
         previewView = findViewById(R.id.previewView);
-//        lightingStatusText = findViewById(R.id.lightingStatusText);
-//        lightingDetailText = findViewById(R.id.lightingDetailText);
-//        blurStatusText = findViewById(R.id.BlurStatusText);
 
         captureButton = findViewById(R.id.captureButton);
         toggleResultsButton = findViewById(R.id.toggleResultsButton);
@@ -121,7 +114,6 @@ public class MainActivity extends AppCompatActivity implements
         resultsPanel = findViewById(R.id.resultsPanel);
         imageView = findViewById(R.id.imageView);
         imageView2 = findViewById(R.id.imageView2);
-//        resultText = findViewById(R.id.resultText);
 
         lightingBlurStatusText = findViewById(R.id.lightingBlurStatusText);
         lightingBlurDetailText = findViewById(R.id.lightingBlurDetailText);
@@ -149,16 +141,9 @@ public class MainActivity extends AppCompatActivity implements
         captureButton.setOnClickListener(v -> onCaptureClicked());
         toggleResultsButton.setOnClickListener(v -> toggleResultsView());
         backToCameraButton.setOnClickListener(v -> backToCameraView());
-
-        captureButton.setEnabled(false);
-//        captureButton.setEnabled(true);
         documentDetection = new DocumentDetection();
 
-//        onModeChanged("Square");  // This sets the overlayView and overlayRect
-//        highlightSelected(modeSquare);  // Highlight the Square mode button by default
-
-        updateCaptureButtonState(false);
-//        updateCaptureButtonState(true);
+        updateCaptureButtonState(true);
     }
 
     private void onModeChanged(String mode) {
@@ -179,8 +164,6 @@ public class MainActivity extends AppCompatActivity implements
             overlayView.setOverlay(null, type);
             overlayRect = overlayView.calculateOverlayRect();
         }
-
-//        Toast.makeText(this, "Mode: " + mode, Toast.LENGTH_SHORT).show();
     }
 
     private void highlightSelected(TextView selected) {
@@ -260,12 +243,12 @@ public class MainActivity extends AppCompatActivity implements
                     Bitmap roiBitmap = extractROIFromFrame(latestFrame);
                     if (roiBitmap != null) {
                         roiBitmap = ImageUtils.rotateBitmap(roiBitmap , 180);
-                        //roiBitmap = ImageUtils.mirrorHorizontal(roiBitmap);
                         Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
                         if (corners != null) {
                             // Map corners from ROI space back to overlay view coordinates
                             PointF[] mappedPoints = mapROICornersToOverlay(corners, roiBitmap);
-                            runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
+                            PointF[] finalMappedPoints = shrinkBottomCorners(mappedPoints);
+                            runOnUiThread(() -> overlayView.setDocumentCorners(finalMappedPoints));
                         } else {
                             runOnUiThread(() -> overlayView.clearCorners());
                         }
@@ -301,7 +284,7 @@ public class MainActivity extends AppCompatActivity implements
         }
 
         // 2) expand first (keep existing behavior)
-        mapped = expandDocumentCorners(mapped, 1.2f);
+        mapped = expandDocumentCorners(mapped);
 
         // 3) compute top & bottom Y of expanded quad
         float minY = Float.MAX_VALUE;
@@ -374,10 +357,10 @@ public class MainActivity extends AppCompatActivity implements
                     (float) (points[i].y * scale + dy)
             );
         }
-        return expandDocumentCorners(mapped, 0.5f);
+        return expandDocumentCorners(mapped);
     }
 
-    private PointF[] expandDocumentCorners(PointF[] corners, float expansionFactor) {
+    private PointF[] expandDocumentCorners(PointF[] corners) {
         float centerX = 0, centerY = 0;
         for (PointF p : corners) {
             centerX += p.x;
@@ -391,8 +374,8 @@ public class MainActivity extends AppCompatActivity implements
             float dx = corners[i].x - centerX;
             float dy = corners[i].y - centerY;
             expanded[i] = new PointF(
-                    centerX + dx * expansionFactor,
-                    centerY + dy * expansionFactor
+                    centerX + dx * (float) 1.25,
+                    centerY + dy * (float) 1.25
             );
         }
         return expanded;
@@ -400,78 +383,18 @@ public class MainActivity extends AppCompatActivity implements
 
     @SuppressLint("SetTextI18n")
     private void onCaptureClicked() {
-//        if (currentLightingResult == null) {
-//            Toast.makeText(this, "Lighting analysis not ready", Toast.LENGTH_SHORT).show();
-//            return;
-//        }
-//
-//        if (currentLightingResult.lightingCondition == LightingAnalyzer.LightingCondition.BAD) {
-//            showLightingIssueDialog();
-//            return;
-//        }
-//
-//        if (currentBlurResult != null && currentBlurResult.isBlurred) {
-//            Toast.makeText(this, "Image is too blurry. Please adjust focus.", Toast.LENGTH_SHORT).show();
-//            return;
-//        }
-
         if (cameraManager != null) {
-            captureButton.setEnabled(false);
+            //captureButton.setEnabled(false);
             captureButton.setText("Capturing..");
             cameraManager.captureImage();
         }
     }
 
-//    @SuppressLint("SetTextI18n")
-//    private void showLightingIssueDialog() {
-//        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-//        builder.setTitle("Image Quality Issue")
-//                .setMessage("Cannot capture image due to lighting:\n\n" +
-//                        generateLightingIssueExplanation(currentLightingResult) +
-//                        "\n\nPlease adjust lighting or camera position.")
-//                .setPositiveButton("OK", (dialog, which) -> dialog.dismiss())
-//                .setNegativeButton("Capture Anyway", (dialog, which) -> {
-//                    if (cameraManager != null) {
-//                        captureButton.setEnabled(false);
-//                        captureButton.setText("Capturing...");
-//                        cameraManager.captureImage();
-//                    }
-//                    dialog.dismiss();
-//                })
-//                .show();
-//    }
-
     @Override
     public void onLightingAnalyzed(LightingAnalyzer.LightingAnalysisResult result) {
-//        currentLightingResult = result;
-//        mainHandler.post(() -> {
-////            lightingStatusText.setText(result.statusMessage);
-////            lightingDetailText.setText(result.detailMessage);
-//
-//            boolean canCapture = result.isCaptureEnabled
-//                    && (currentBlurResult == null || !currentBlurResult.isBlurred);
-//            updateCaptureButtonState(canCapture);
-//        });
-
         currentLightingResult = result;
         mainHandler.post(this::updateStarRatingAndStatus);
     }
-
-//    private String generateLightingIssueExplanation(LightingAnalyzer.LightingAnalysisResult result) {
-//        StringBuilder explanation = new StringBuilder();
-//
-//        if (result.hasReflection) {
-//            explanation.append("• Reflection detected on document surface\n");
-//        }
-//        if (result.brightPixelRatio >= 0.55) {
-//            explanation.append("• Excessive brightness: possible overexposure\n");
-//        }
-//
-//        if (explanation.length() == 0) {
-//            explanation.append("Multiple lighting issues detected");
-//        }
-//        return explanation.toString();
-//    }
 
     @Override
     public void onImageCaptured(Bitmap bitmap) {
@@ -489,7 +412,7 @@ public class MainActivity extends AppCompatActivity implements
                     // Warp the document using the full resolution captured image
                     // but scale the corners appropriately
                     Point[] scaledCorners = scaleCornersToCapturedImage(corners, roiBitmap, bitmap); // shrink bottom by 10%
-                    scaledCorners = shrinkBottomCorners(scaledCorners, 0.1);
+                    scaledCorners = shrinkBottomCorners(scaledCorners);
                     Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, scaledCorners);
                     imageView2.setImageBitmap(warpedBitmap);
                 } else {
@@ -509,9 +432,9 @@ public class MainActivity extends AppCompatActivity implements
             if (currentLightingResult != null) {
                 updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
             } else {
-                updateCaptureButtonState(false);
+                //updateCaptureButtonState(false);
             }
-//            updateCaptureButtonState(true);
+            updateCaptureButtonState(true);
         });
     }
 
@@ -543,7 +466,6 @@ public class MainActivity extends AppCompatActivity implements
         }
         return scaledCorners;
     }
-
     private Rect scaleRectToBitmap(RectF rectInView,
                                    int bmpW, int bmpH,
                                    int viewW, int viewH) {
@@ -572,7 +494,44 @@ public class MainActivity extends AppCompatActivity implements
         return new Rect(left, top, right, bottom);
     }
 
-    private Point[] shrinkBottomCorners(Point[] corners, double shrinkFactor) {
+    private PointF[] shrinkBottomCorners(PointF[] corners) {
+        if (corners == null || corners.length < 4) return corners;
+
+        // Find min and max Y
+        float minY = Float.MAX_VALUE;
+        float maxY = Float.MIN_VALUE;
+        for (PointF p : corners) {
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+        float height = maxY - minY;
+        if (height <= 0) return corners;
+
+        float shrink = height * 0.15f; // e.g. 0.15 = shrink by 15%
+
+        // Find two bottom-most points
+        int idx1 = -1, idx2 = -1;
+        float max1 = Float.MIN_VALUE, max2 = Float.MIN_VALUE;
+        for (int i = 0; i < corners.length; i++) {
+            if (corners[i].y > max1) {
+                max2 = max1;
+                idx2 = idx1;
+                max1 = corners[i].y;
+                idx1 = i;
+            } else if (corners[i].y > max2) {
+                max2 = corners[i].y;
+                idx2 = i;
+            }
+        }
+
+        // Move bottom two upward
+        if (idx1 >= 0) corners[idx1].y = Math.max(corners[idx1].y - shrink, minY);
+        if (idx2 >= 0) corners[idx2].y = Math.max(corners[idx2].y - shrink, minY);
+
+        return corners;
+    }
+
+    private Point[] shrinkBottomCorners(Point[] corners) {
         if (corners == null || corners.length < 4) return corners;
 
         // Find min and max Y
@@ -585,7 +544,7 @@ public class MainActivity extends AppCompatActivity implements
         double height = maxY - minY;
         if (height <= 0) return corners;
 
-        double shrink = height * shrinkFactor; // e.g. 0.1 = shrink by 10%
+        double shrink = height * 0.15; // e.g. 0.15 = shrink by 15%
 
         // Find two bottom-most points
         int idx1 = -1, idx2 = -1;
@@ -617,9 +576,9 @@ public class MainActivity extends AppCompatActivity implements
             if (currentLightingResult != null) {
                 updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
             } else {
-                updateCaptureButtonState(false);
+                //updateCaptureButtonState(false);
             }
-//            updateCaptureButtonState(true);
+            updateCaptureButtonState(true);
         });
     }
 
@@ -702,32 +661,20 @@ public class MainActivity extends AppCompatActivity implements
 
     @Override
     public void onBlurAnalyzed(BlurDetector.BlurDetectionResult result) {
-//        currentBlurResult = result;
-//        mainHandler.post(() -> {
-//            @SuppressLint("DefaultLocale")
-////            String blurMessage = String.format("Blur: %b, Occluded: %b, AvgVariance: %.1f, BlurPct: %.3f, OcclusionPct: %.3f)",
-////                    result.isBlurred, result.isOccluded,  result.avgVariance, result.blurPercentage, result.occlusionPercentage);
-//
-////            blurStatusText.setText(blurMessage);
-//
-//            boolean canCapture = (currentLightingResult != null && currentLightingResult.isCaptureEnabled)
-//                    && !result.isBlurred;
-//            updateCaptureButtonState(canCapture);
-//        });
         currentBlurResult = result;
         mainHandler.post(this::updateStarRatingAndStatus);
     }
 
+    @SuppressLint("SetTextI18n")
     private void updateStarRatingAndStatus() {
         if (currentLightingResult == null || currentBlurResult == null) {
             lightingBlurStatusText.setText("Analyzing...");
             lightingBlurDetailText.setText("");
             setStars(0);
-            updateCaptureButtonState(false);
+            //updateCaptureButtonState(false);
             return;
         }
 
-        // Determine overall quality score (example logic)
         int stars = 3; // max stars
 
         // Deduct stars for bad lighting
@@ -743,7 +690,6 @@ public class MainActivity extends AppCompatActivity implements
         } else if (currentBlurResult.blurPercentage > 0.1) { // example threshold
             stars = Math.min(stars, 2);
         }
-
         // Update star images
         setStars(stars);
 
@@ -778,7 +724,7 @@ public class MainActivity extends AppCompatActivity implements
         lightingBlurDetailText.setText(detail.trim());
 
         // Enable capture only if stars >= 2
-        updateCaptureButtonState(stars >= 2);
+        //updateCaptureButtonState(stars >= 2);
     }
 
     private void setStars(int count) {
@@ -786,5 +732,4 @@ public class MainActivity extends AppCompatActivity implements
         star2.setImageResource(count >= 2 ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
         star3.setImageResource(count >= 3 ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
     }
-
 }
