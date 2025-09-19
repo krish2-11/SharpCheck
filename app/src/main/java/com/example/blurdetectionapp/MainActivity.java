@@ -260,7 +260,7 @@ public class MainActivity extends AppCompatActivity implements
                 }
 
                 if (isCornerDetectionActive) {
-                    cornerHandler.postDelayed(this, 300);
+                    cornerHandler.postDelayed(this, 1000);
                 }
             }
         };
@@ -296,7 +296,7 @@ public class MainActivity extends AppCompatActivity implements
         float height = maxY - minY;
         if (height <= 0f) return mapped; // nothing to do
 
-        float shrink = height * 0.1f; // 10%
+        float shrink = height * 0.05f; // 5%
 
         // 4) find indices of two largest Y values (bottom-most points)
         float[] ys = new float[4];
