@@ -16,7 +16,7 @@ public class DocumentDetection {
 
     /**
      * Detects document corners and returns them as Point[]
-     * Works on any background
+     * Works on any darker background
      */
     public Point[] detectDocumentCornersPoints(Bitmap bitmap) {
         Mat mat = new Mat();
@@ -26,7 +26,7 @@ public class DocumentDetection {
         Mat grayMat = new Mat();
         Imgproc.cvtColor(mat, grayMat, Imgproc.COLOR_RGBA2GRAY);
 
-        // 2️⃣ Remove background by thresholding
+         //Remove background by thresholding
         Mat mask = new Mat();
         Imgproc.threshold(
                 grayMat,               // input gray image
@@ -54,11 +54,9 @@ public class DocumentDetection {
         // Apply the filter
         Imgproc.filter2D(foreground, dst, foreground.depth(), kernel);
 
-        Imgproc.GaussianBlur(dst, dst, new Size(5, 5), 0);
-
         // 3️⃣ Canny edge detection
         Mat edges = new Mat();
-        Imgproc.Canny(dst, edges, 150, 200); // Adjust thresholds if needed
+        Imgproc.Canny(dst, edges, 25, 150);
 
         Mat kernel2 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
         Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel2);
@@ -114,46 +112,55 @@ public class DocumentDetection {
         Mat mat = new Mat();
         Utils.bitmapToMat(bitmap, mat);
 
+        // 1️⃣ Convert to grayscale
         Mat grayMat = new Mat();
         Imgproc.cvtColor(mat, grayMat, Imgproc.COLOR_RGBA2GRAY);
 
-        // Apply Gaussian blur
-        Mat blurred = new Mat();
-        Imgproc.GaussianBlur(grayMat, blurred, new Size(5, 5), 0);
+        //Remove background by thresholding
+        Mat mask = new Mat();
+        Imgproc.adaptiveThreshold(
+                grayMat,                           // input
+                mask,                              // output
+                255,                               // max value
+                Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, // adaptive method
+                Imgproc.THRESH_BINARY,             // threshold type
+                11,                                // block size
+                2                                  // C constant
+        );
+        // 3️⃣ Keep only the document (white areas in mask)
+        Mat foreground = new Mat();
+        mat.copyTo(foreground, mask);
 
-        // Compute gradients
-        Mat gradX = new Mat(), gradY = new Mat();
-        Imgproc.Sobel(blurred, gradX, CvType.CV_32F, 1, 0, 3);
-        Imgproc.Sobel(blurred, gradY, CvType.CV_32F, 0, 1, 3);
+        Imgproc.GaussianBlur(foreground, foreground, new Size(5, 5), 0);
+        Mat dst = new Mat();
 
-        // Compute gradient magnitude
-        Mat magnitude = new Mat();
-        Mat gradX2 = new Mat(), gradY2 = new Mat();
-        Core.multiply(gradX, gradX, gradX2);
-        Core.multiply(gradY, gradY, gradY2);
-        Core.add(gradX2, gradY2, magnitude);
-        Core.sqrt(magnitude, magnitude);
+        // Define a sharpening kernel
+        Mat kernel = new Mat(3, 3, CvType.CV_32F);
+        float[] data = {
+                0, -1,  0,
+                -1,  5, -1,
+                0, -1,  0
+        };
+        kernel.put(0, 0, data);
 
-        // Normalize and convert to 8-bit
-        Mat normalizedMag = new Mat();
-        Core.normalize(magnitude, normalizedMag, 0, 255, Core.NORM_MINMAX, CvType.CV_8U);
+        // Apply the filter
+        Imgproc.filter2D(foreground, dst, foreground.depth(), kernel);
 
-        // Apply threshold to get strong edges
-        Mat strongEdges = new Mat();
-        Imgproc.threshold(normalizedMag, strongEdges, 50, 255, Imgproc.THRESH_BINARY);
+        Imgproc.GaussianBlur(dst, dst, new Size(5, 5), 0);
 
-        // Morphological operations to connect edges
-        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3));
-        Imgproc.morphologyEx(strongEdges, strongEdges, Imgproc.MORPH_CLOSE, kernel);
+        // 3️⃣ Canny edge detection
+        Mat edges = new Mat();
+        Imgproc.Canny(dst, edges, 0, 150); // Adjust thresholds if needed
 
-        Bitmap outputBitmap = Bitmap.createBitmap(strongEdges.cols(), strongEdges.rows(), Bitmap.Config.ARGB_8888);
-        Utils.matToBitmap(strongEdges, outputBitmap);
+        Mat kernel2 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
+        Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel2);
+
+        Bitmap outputBitmap = Bitmap.createBitmap(edges.cols(), edges.rows(), Bitmap.Config.ARGB_8888);
+        Utils.matToBitmap(edges, outputBitmap);
         return outputBitmap;
     }
 
-    /**
-     * Warp image using detected corners
-     */
+    /* Warp image using detected corners */
     public Bitmap warpToDocumentFromPoints(Bitmap bitmap, Point[] points) {
         Mat src = new Mat();
         Utils.bitmapToMat(bitmap, src);

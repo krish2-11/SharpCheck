@@ -27,19 +27,6 @@
         app:layout_constraintStart_toStartOf="@id/previewView"
         app:layout_constraintEnd_toEndOf="@id/previewView">
 
-        <ImageView
-            android:id="@+id/shadowMaskView"
-            android:layout_width="0dp"
-            android:layout_height="0dp"
-            android:background="@android:color/transparent"
-            android:scaleType="fitXY"
-            android:alpha="0.4"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
-
-
         <!-- Overlay for contours/shapes -->
         <com.example.blurdetectionapp.utils.OverlayView
             android:id="@+id/overlayView"
