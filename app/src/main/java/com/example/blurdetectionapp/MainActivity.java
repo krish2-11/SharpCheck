@@ -35,6 +35,7 @@ import com.example.blurdetectionapp.utils.OverlayView;
 import org.opencv.android.OpenCVLoader;
 import org.opencv.core.Point;
 
+import java.util.List;
 import java.util.Objects;
 
 @ExperimentalGetImage
@@ -77,6 +78,9 @@ public class MainActivity extends AppCompatActivity implements
     // Captured image
     private Bitmap capturedBitmap;
     RectF overlayRect = null;
+
+    private Point[] lastStableCorners = null;
+    private android.util.Size lastFrameSize = null;
 
     private TextView modeRectangle, modeSquare, modeCard;
 
@@ -138,10 +142,13 @@ public class MainActivity extends AppCompatActivity implements
 
         overlayView = findViewById(R.id.overlayView);
 
+        onModeChanged("A4");
+        highlightSelected(modeRectangle);
+
         captureButton.setOnClickListener(v -> onCaptureClicked());
         toggleResultsButton.setOnClickListener(v -> toggleResultsView());
         backToCameraButton.setOnClickListener(v -> backToCameraView());
-        documentDetection = new DocumentDetection();
+        documentDetection = new DocumentDetection(this);
 
         updateCaptureButtonState(true);
     }
@@ -199,31 +206,31 @@ public class MainActivity extends AppCompatActivity implements
 
     // NEW METHOD: Extract ROI bitmap from the overlay area
     private Bitmap extractROIFromFrame(Bitmap frame) {
-        if (frame == null || overlayView == null) return null;
+        if (frame == null || overlayView == null) return frame;
 
         RectF overlayRect = overlayView.getOverlayRect();
-
-        if (overlayRect == null){
-            Log.e("OverlayRect" , "Its null during extractROIFromFrame");
+        if (overlayRect == null) {
+            Log.w(TAG, "OverlayRect is null during extractROIFromFrame, using full frame");
             return frame;
-        } // fallback to full frame
-
-        // Scale overlay rect from view coordinates to bitmap coordinates
-        Rect bitmapRect = scaleRectToBitmap(overlayRect,
-                frame.getWidth(), frame.getHeight(),
-                overlayView.getWidth(), overlayView.getHeight());
-
-        // Ensure rect is within bitmap bounds
-        bitmapRect.left = Math.max(0, bitmapRect.left);
-        bitmapRect.top = Math.max(0, bitmapRect.top);
-        bitmapRect.right = Math.min(frame.getWidth(), bitmapRect.right);
-        bitmapRect.bottom = Math.min(frame.getHeight(), bitmapRect.bottom);
-
-        if (bitmapRect.width() <= 0 || bitmapRect.height() <= 0) {
-            return frame; // fallback to full frame
         }
 
         try {
+            // Scale overlay rect from view coordinates to bitmap coordinates
+            Rect bitmapRect = scaleRectToBitmap(overlayRect,
+                    frame.getWidth(), frame.getHeight(),
+                    overlayView.getWidth(), overlayView.getHeight());
+
+            // Ensure rect is within bitmap bounds
+            bitmapRect.left = Math.max(0, bitmapRect.left);
+            bitmapRect.top = Math.max(0, bitmapRect.top);
+            bitmapRect.right = Math.min(frame.getWidth(), bitmapRect.right);
+            bitmapRect.bottom = Math.min(frame.getHeight(), bitmapRect.bottom);
+
+            if (bitmapRect.width() <= 0 || bitmapRect.height() <= 0) {
+                Log.w(TAG, "Invalid bitmap rect, using full frame");
+                return frame;
+            }
+
             return Bitmap.createBitmap(frame,
                     bitmapRect.left, bitmapRect.top,
                     bitmapRect.width(), bitmapRect.height());
@@ -238,30 +245,43 @@ public class MainActivity extends AppCompatActivity implements
         cornerRunnable = new Runnable() {
             @Override
             public void run() {
-                if (latestFrame != null) {
-                    // Extract ROI before document detection
-                    Bitmap roiBitmap = extractROIFromFrame(latestFrame);
-                    if (roiBitmap != null) {
-                        roiBitmap = ImageUtils.rotateBitmap(roiBitmap , 180);
-                        Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
-                        if (corners != null) {
-                            // Map corners from ROI space back to overlay view coordinates
-                            PointF[] mappedPoints = mapROICornersToOverlay(corners, roiBitmap);
-                            PointF[] finalMappedPoints = shrinkBottomCorners(mappedPoints);
-                            runOnUiThread(() -> overlayView.setDocumentCorners(finalMappedPoints));
+                if (latestFrame != null && !latestFrame.isRecycled()) {
+                    try {
+                        // --- FIX 1: Use the full frame, do NOT extract ROI ---
+                        // --- FIX 2: Rotate by 90 degrees, NOT 180 ---
+                        Bitmap rotatedFrame = ImageUtils.rotateBitmap(latestFrame, 90);
+
+                        // Detect corners in the full rotated frame
+                        List<Point[]> allCorners = documentDetection.detectDocumentCornersPoints(rotatedFrame);
+
+                        if (allCorners != null && !allCorners.isEmpty()) {
+                            // The method already finds the best one, so just get the first
+                            Point[] corners = allCorners.get(0);
+
+                            lastStableCorners = corners;
+                            lastFrameSize = new android.util.Size(rotatedFrame.getWidth(), rotatedFrame.getHeight());
+
+                            // --- FIX 3: Map corners from the full frame's coordinates to the view's coordinates ---
+                            PointF[] mappedPoints = mapPointsToOverlay(corners, rotatedFrame.getWidth(), rotatedFrame.getHeight(), overlayView);
+                            runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
                         } else {
                             runOnUiThread(() -> overlayView.clearCorners());
                         }
 
-                        // Clean up ROI bitmap if it's different from original
-                        if (roiBitmap != latestFrame) {
-                            roiBitmap.recycle();
+                        // Clean up the rotated bitmap
+                        if (rotatedFrame != latestFrame) {
+                            rotatedFrame.recycle();
                         }
+
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error in corner detection loop: " + e.getMessage());
+                        runOnUiThread(() -> overlayView.clearCorners());
                     }
                 }
 
                 if (isCornerDetectionActive) {
-                    cornerHandler.postDelayed(this, 1000);
+                    // Run more frequently for a smoother feel
+                    cornerHandler.postDelayed(this, 100);
                 }
             }
         };
@@ -271,11 +291,10 @@ public class MainActivity extends AppCompatActivity implements
     // NEW METHOD: Map corners from ROI coordinates to overlay view coordinates
     private PointF[] mapROICornersToOverlay(Point[] corners, Bitmap roiBitmap) {
         if (overlayRect == null) {
-            // Fallback to original mapping method
             return mapPointsToOverlay(corners, roiBitmap.getWidth(), roiBitmap.getHeight(), overlayView);
         }
 
-        // 1) map to overlay co-ords
+        // Map corners from ROI bitmap coordinates to overlay view coordinates
         PointF[] mapped = new PointF[4];
         for (int i = 0; i < 4; i++) {
             float x = (float) (corners[i].x * overlayRect.width() / roiBitmap.getWidth());
@@ -283,70 +302,30 @@ public class MainActivity extends AppCompatActivity implements
             mapped[i] = new PointF(overlayRect.left + x, overlayRect.top + y);
         }
 
-        // 2) expand first (keep existing behavior)
-        mapped = expandDocumentCorners(mapped);
-
-        // 3) compute top & bottom Y of expanded quad
-        float minY = Float.MAX_VALUE;
-        float maxY = Float.MIN_VALUE;
-        for (PointF p : mapped) {
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
-        }
-
-        float height = maxY - minY;
-        if (height <= 0f) return mapped; // nothing to do
-
-        float shrink = height * 0.05f; // 5%
-
-        // 4) find indices of two largest Y values (bottom-most points)
-        float[] ys = new float[4];
-        for (int i = 0; i < 4; i++) ys[i] = mapped[i].y;
-
-        int maxIdx1 = -1;
-        int maxIdx2 = -1;
-        float maxVal1 = Float.MIN_VALUE;
-        float maxVal2 = Float.MIN_VALUE;
-
-        for (int i = 0; i < 4; i++) {
-            if (ys[i] > maxVal1) {
-                maxVal2 = maxVal1;
-                maxIdx2 = maxIdx1;
-                maxVal1 = ys[i];
-                maxIdx1 = i;
-            } else if (ys[i] > maxVal2) {
-                maxVal2 = ys[i];
-                maxIdx2 = i;
-            }
-        }
-
-        // 5) move only those bottom two points up by 'shrink'
-        if (maxIdx1 >= 0) {
-            mapped[maxIdx1].y = Math.max(mapped[maxIdx1].y - shrink, minY);
-        }
-        if (maxIdx2 >= 0) {
-            mapped[maxIdx2].y = Math.max(mapped[maxIdx2].y - shrink, minY);
-        }
-
         return mapped;
     }
+
+    private Point[] getLargestDocumentCorners(List<Point[]> allCorners, DocumentDetection detector) {
+        if (allCorners == null || allCorners.isEmpty()) {
+            return null;
+        }
+        // allCorners is already sorted by area descending in DocumentDetection, so take first
+        return allCorners.get(0);
+    }
+
 
     private PointF[] mapPointsToOverlay(Point[] points, int imgWidth, int imgHeight, View overlayView) {
         int viewWidth = overlayView.getWidth();
         int viewHeight = overlayView.getHeight();
 
-        if (viewWidth == 0 || viewHeight == 0) {
-            PointF[] fallback = new PointF[4];
-            for (int i = 0; i < 4; i++) {
-                fallback[i] = new PointF((float) points[i].x, (float) points[i].y);
-            }
-            return fallback;
-        }
+        if (viewWidth == 0 || viewHeight == 0) return null; // Cannot map if view is not ready
 
+        // This logic correctly handles fitting the image preview (which may be letterboxed) inside the view
         float scaleX = (float) viewWidth / imgWidth;
         float scaleY = (float) viewHeight / imgHeight;
-        float scale = Math.min(scaleX, scaleY);
+        float scale = Math.min(scaleX, scaleY); // Use min to maintain aspect ratio
 
+        // Calculates the offset for letterboxing/pillarboxing
         float dx = (viewWidth - imgWidth * scale) / 2f;
         float dy = (viewHeight - imgHeight * scale) / 2f;
 
@@ -357,7 +336,8 @@ public class MainActivity extends AppCompatActivity implements
                     (float) (points[i].y * scale + dy)
             );
         }
-        return expandDocumentCorners(mapped);
+        // --- FIX 4: Do NOT artificially expand the corners ---
+        return mapped;
     }
 
     private PointF[] expandDocumentCorners(PointF[] corners) {
@@ -401,91 +381,112 @@ public class MainActivity extends AppCompatActivity implements
         capturedBitmap = bitmap;
 
         mainHandler.post(() -> {
+            if (lastStableCorners == null || lastFrameSize == null) {
+                Toast.makeText(this, "No document was detected to capture.", Toast.LENGTH_SHORT).show();
+                imageView.setImageBitmap(bitmap);
+                imageView2.setImageBitmap(bitmap);
+                showResultsView();
+                updateCaptureButtonState(true);
+                return;
+            }
+
+            Log.d(TAG, "Using last stable corners for capture: " + java.util.Arrays.toString(lastStableCorners));
             imageView.setImageBitmap(bitmap);
 
-            // CHANGE: Extract ROI from captured image for document detection
-            Bitmap roiBitmap = extractROIFromFrame(latestFrame != null ? latestFrame : bitmap);
-            if (roiBitmap != null) {
-                roiBitmap = ImageUtils.rotateBitmap(roiBitmap , 180);
-                Point[] corners = documentDetection.detectDocumentCornersPoints(roiBitmap);
-                if (corners != null) {
-                    // Warp the document using the full resolution captured image
-                    // but scale the corners appropriately
-                    Point[] scaledCorners = scaleCornersToCapturedImage(corners, roiBitmap, bitmap); // shrink bottom by 10%
-                    scaledCorners = shrinkBottomCorners(scaledCorners);
-                    Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, scaledCorners);
-                    imageView2.setImageBitmap(warpedBitmap);
-                } else {
-                    Toast.makeText(this, "No document detected", Toast.LENGTH_SHORT).show();
-                    imageView2.setImageResource(R.drawable.no_document);
-                }
+            // --- FINAL, MATHEMATICALLY CORRECT SCALING AND WARPING LOGIC ---
 
-                // Clean up ROI bitmap if different from original
-                if (roiBitmap != bitmap && roiBitmap != latestFrame) {
-                    roiBitmap.recycle();
-                }
-//                roiBitmap = documentDetection.outputCheck(roiBitmap);
-//                imageView2.setImageBitmap(roiBitmap);
+            // 1. Get dimensions
+            // High-resolution original capture (e.g., 3000x4000)
+            float highResOriginalWidth = bitmap.getWidth();
+            float highResOriginalHeight = bitmap.getHeight();
+            // Low-resolution rotated preview (e.g., 640x480)
+            float lowResRotatedWidth = lastFrameSize.getWidth();
+            float lowResRotatedHeight = lastFrameSize.getHeight();
+
+            // 2. Calculate separate scale factors for X and Y to handle all aspect ratios.
+            float scaleX = highResOriginalWidth / lowResRotatedHeight;
+            float scaleY = highResOriginalHeight / lowResRotatedWidth;
+
+            Point[] originalCorners = new Point[4];
+            for (int i = 0; i < 4; i++) {
+                Point lowResCorner = lastStableCorners[i];
+
+                // 3. This is the corrected transformation from a +90 degree rotated space.
+                // The original X coordinate comes from the rotated Y coordinate.
+                // The original Y coordinate comes from the rotated X coordinate.
+                double original_x = lowResCorner.y * scaleX;
+                double original_y = (lowResRotatedWidth - lowResCorner.x) * scaleY;
+
+                originalCorners[i] = new Point(original_x, original_y);
             }
-            showResultsView();
 
-            if (currentLightingResult != null) {
-                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
+            // 4. Warp the ORIGINAL high-resolution image using the final, perfectly mapped corners.
+            Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, originalCorners);
+
+            if (warpedBitmap != null) {
+                imageView2.setImageBitmap(warpedBitmap);
             } else {
-                //updateCaptureButtonState(false);
+                Toast.makeText(this, "Could not create a top-down view.", Toast.LENGTH_SHORT).show();
+                imageView2.setImageResource(R.drawable.no_document);
             }
+
+            showResultsView();
             updateCaptureButtonState(true);
         });
     }
 
     // NEW METHOD: Scale corners from ROI to captured image coordinates
     private Point[] scaleCornersToCapturedImage(Point[] roiCorners, Bitmap roiBitmap, Bitmap capturedBitmap) {
-        if (latestFrame == null || overlayView == null) {
-            return roiCorners; // fallback
+        if (roiCorners == null || capturedBitmap == null) {
+            Log.w(TAG, "Invalid inputs for corner scaling; returning null.");
+            return null;
         }
         if (overlayRect == null) {
-            return roiCorners; // fallback
+            Log.w(TAG, "overlayRect null; falling back to full image corners (no scaling).");
+            // Detect corners directly on full captured (add this fallback)
+            Bitmap rotatedCaptured = ImageUtils.rotateBitmap(capturedBitmap, 180);
+            List<Point[]> allCorners = documentDetection.detectDocumentCornersPoints(rotatedCaptured);
+            Point[] fullCorners = getLargestDocumentCorners(allCorners, documentDetection);
+            if (rotatedCaptured != capturedBitmap) rotatedCaptured.recycle();
+            return fullCorners != null ? shrinkBottomCorners(fullCorners) : null;  // Use full corners
         }
 
-        // Scale ROI rect from view coordinates to captured image coordinates
-        Rect capturedROI = scaleRectToBitmap(overlayRect,
-                capturedBitmap.getWidth(), capturedBitmap.getHeight(),
+        Rect capturedROI = scaleRectToBitmap(overlayRect, capturedBitmap.getWidth(), capturedBitmap.getHeight(),
                 overlayView.getWidth(), overlayView.getHeight());
 
         Point[] scaledCorners = new Point[4];
         for (int i = 0; i < 4; i++) {
-            // Scale corner from ROI bitmap space to captured image ROI space
             double x = roiCorners[i].x * capturedROI.width() / roiBitmap.getWidth();
             double y = roiCorners[i].y * capturedROI.height() / roiBitmap.getHeight();
-
-            // Translate to captured image coordinates
-            scaledCorners[i] = new Point(
-                    capturedROI.left + x,
-                    capturedROI.top + y
-            );
+            scaledCorners[i] = new Point(capturedROI.left + x, capturedROI.top + y);
         }
-        return scaledCorners;
+        return shrinkBottomCorners(scaledCorners);  // Now consistent
     }
-    private Rect scaleRectToBitmap(RectF rectInView,
-                                   int bmpW, int bmpH,
-                                   int viewW, int viewH) {
+
+
+    private Rect scaleRectToBitmap(RectF rectInView, int bmpW, int bmpH, int viewW, int viewH) {
+        if (viewW <= 0 || viewH <= 0) {
+            Log.w(TAG, "Invalid view dimensions (w=" + viewW + ", h=" + viewH + "). Falling back to full bitmap.");
+            return new Rect(0, 0, bmpW, bmpH);  // Full frame fallback
+        }
+        if (bmpW <= 0 || bmpH <= 0) {
+            Log.w(TAG, "Invalid bitmap dimensions (w=" + bmpW + ", h=" + bmpH + "). Returning empty rect.");
+            return new Rect(0, 0, 0, 0);  // Invalid, will trigger full fallback in caller
+        }
 
         float scaleX = (float) viewW / bmpW;
         float scaleY = (float) viewH / bmpH;
-        // FIT_CENTER ⇒ use the smaller scale
         float scale = Math.min(scaleX, scaleY);
 
-        // padding due to letter-boxing
         float dx = (viewW - bmpW * scale) / 2f;
         float dy = (viewH - bmpH * scale) / 2f;
 
-        // convert rect from view space → bitmap space
         int left   = Math.round((rectInView.left   - dx) / scale);
         int top    = Math.round((rectInView.top    - dy) / scale);
         int right  = Math.round((rectInView.right  - dx) / scale);
         int bottom = Math.round((rectInView.bottom - dy) / scale);
 
-        // clamp to bitmap bounds
+        // Clamp to bitmap bounds
         left   = Math.max(0, Math.min(left,   bmpW - 1));
         top    = Math.max(0, Math.min(top,    bmpH - 1));
         right  = Math.max(0, Math.min(right,  bmpW));
@@ -493,6 +494,7 @@ public class MainActivity extends AppCompatActivity implements
 
         return new Rect(left, top, right, bottom);
     }
+
 
     private PointF[] shrinkBottomCorners(PointF[] corners) {
         if (corners == null || corners.length < 4) return corners;
@@ -573,12 +575,12 @@ public class MainActivity extends AppCompatActivity implements
     public void onCaptureError(String error) {
         mainHandler.post(() -> {
             Toast.makeText(this, "Capture failed: " + error, Toast.LENGTH_SHORT).show();
-            if (currentLightingResult != null) {
-                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
-            } else {
-                //updateCaptureButtonState(false);
-            }
-            updateCaptureButtonState(true);
+//            if (currentLightingResult != null) {
+//                updateCaptureButtonState(currentLightingResult.isCaptureEnabled);
+//            } else {
+//                //updateCaptureButtonState(false);
+//            }
+//            updateCaptureButtonState(true);
         });
     }
 
@@ -671,7 +673,7 @@ public class MainActivity extends AppCompatActivity implements
             lightingBlurStatusText.setText("Analyzing...");
             lightingBlurDetailText.setText("");
             setStars(0);
-            //updateCaptureButtonState(false);
+            updateCaptureButtonState(false);
             return;
         }
 
@@ -723,8 +725,8 @@ public class MainActivity extends AppCompatActivity implements
         }
         lightingBlurDetailText.setText(detail.trim());
 
-        // Enable capture only if stars >= 2
-        //updateCaptureButtonState(stars >= 2);
+//         Enable capture only if stars >= 2
+        updateCaptureButtonState(stars >= 2);
     }
 
     private void setStars(int count) {

@@ -93,7 +93,7 @@ public class CameraManager {
     public CameraManager(Context context, LifecycleOwner lifecycleOwner) {
         this.context = context;
         this.lifecycleOwner = lifecycleOwner;
-        this.cameraExecutor = Executors.newFixedThreadPool(2); // Allow parallel analysis
+        this.cameraExecutor = Executors.newSingleThreadExecutor(); // Allow parallel analysis
     }
 
     /**
@@ -246,19 +246,10 @@ public class CameraManager {
      * Combined Image Analyzer for all analysis tasks
      */
     private class CombinedImageAnalyzer implements ImageAnalysis.Analyzer {
-        private long lastAnalysisTime = 0;
-        private static final long ANALYSIS_INTERVAL = 500; // ms
 
         @Override
         public void analyze(@NonNull ImageProxy image) {
             long currentTime = System.currentTimeMillis();
-
-            // Throttle analysis to avoid excessive processing
-            if (currentTime - lastAnalysisTime < ANALYSIS_INTERVAL) {
-                image.close();
-                return;
-            }
-            lastAnalysisTime = currentTime;
 
             // Convert ImageProxy to OpenCV Mat
             Mat mat = imageProxyToMat(image);
@@ -266,15 +257,6 @@ public class CameraManager {
                 image.close();
                 return;
             }
-            int rotation = image.getImageInfo().getRotationDegrees();
-            mat = rotateMat(mat,rotation);
-//            mat = rotateMat(mat,rotation);
-//            mat = rotateMat(mat,rotation);
-
-
-            // Extract ROI for analysis
-            Mat roiMat = extractROIFromMat(mat);
-
 
             // Frame callback (use full frame for overlay mapping)
             if (frameCallback != null) {
@@ -286,39 +268,44 @@ public class CameraManager {
                 }
             }
 
-            // Lighting analysis on ROI
-                if (lightingCallback != null) {
-                    Mat lightingMat = roiMat != null ? extractROIFromMat(mat) : mat.clone();
-//                    Mat lightingMat = roiMat != null ? roiMat : mat.clone();
-                    cameraExecutor.execute(() -> {
-                        LightingAnalyzer.LightingAnalysisResult result =
-                                LightingAnalyzer.analyzeLighting(lightingMat);
-                        lightingMat.release();
-                        ContextCompat.getMainExecutor(context).execute(() ->
-                                lightingCallback.onLightingAnalyzed(result)
-                        );
-                    });
-                }
+            // Extract ROI for analysis
+            Mat roiMat = extractROIFromMat(mat);
 
-
-            // Blur analysis on ROI
-            if (blurCallback != null) {
-                Mat blurMat = roiMat != null ? extractROIFromMat(mat) : mat.clone();
-//                Mat blurMat = roiMat != null ? roiMat : mat.clone();
+            // Lighting analysis on the FULL frame
+            if (lightingCallback != null) {
+                Mat lightingMat = roiMat.clone(); // Use mat
                 cameraExecutor.execute(() -> {
-                    BlurDetector.BlurDetectionResult result =
-                            BlurDetector.detectBlurAndOcclusion(blurMat);
-                    blurMat.release();
+                    LightingAnalyzer.LightingAnalysisResult result =
+                            LightingAnalyzer.analyzeLighting(lightingMat);
+                    lightingMat.release();
+
                     ContextCompat.getMainExecutor(context).execute(() ->
-                            blurCallback.onBlurAnalyzed(result)
+
+                            lightingCallback.onLightingAnalyzed(result)
+
                     );
                 });
             }
 
+            // Blur analysis on the FULL frame
+            if (blurCallback != null) {
+                Mat blurMat = roiMat.clone(); // Use mat
+                cameraExecutor.execute(() -> {
+                    BlurDetector.BlurDetectionResult result =
+                            BlurDetector.detectBlurAndOcclusion(blurMat);
+                    blurMat.release();
+
+                    ContextCompat.getMainExecutor(context).execute(() ->
+
+                            blurCallback.onBlurAnalyzed(result)
+
+                    );
+                });
+            }
 
             // Clean up
             if (roiMat != mat) {
-                roiMat.release(); // Release ROI mat if it's different from original
+                roiMat.release();
             }
             mat.release();
             image.close();

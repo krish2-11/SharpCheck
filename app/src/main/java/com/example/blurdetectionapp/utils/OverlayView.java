@@ -23,6 +23,7 @@ public class OverlayView extends View {
 
     private PointF[] points = null;
     private Bitmap shadowMask = null;
+    private Bitmap scaledShadowMask = null;
 
     public enum OverlayType { SQUARE, PORTRAIT, LANDSCAPE }
     private OverlayType overlayType = OverlayType.SQUARE;
@@ -110,6 +111,18 @@ public class OverlayView extends View {
 
     public void setShadowMask(Bitmap shadowMask) {
         this.shadowMask = shadowMask;
+        if (shadowMask != null && !shadowMask.isRecycled()) {
+            // Pre-scale once
+            if (scaledShadowMask != null && !scaledShadowMask.isRecycled()) {
+                scaledShadowMask.recycle();
+            }
+            scaledShadowMask = Bitmap.createScaledBitmap(shadowMask, getWidth(), getHeight(), false);
+        } else {
+            if (scaledShadowMask != null) {
+                scaledShadowMask.recycle();
+                scaledShadowMask = null;
+            }
+        }
         invalidate();
     }
 
@@ -124,8 +137,7 @@ public class OverlayView extends View {
         int viewHeight = getHeight();
 
         if (viewWidth == 0 || viewHeight == 0) {
-            // View not measured yet, will be called again in onDraw
-            Log.e("calculateOverlayRect","Get Width And Height");
+            Log.w("OverlayView", "View not measured yet (w=" + viewWidth + ", h=" + viewHeight + "). OverlayRect will be null until layout.");
             overlayRect = null;
             return null;
         }
@@ -202,14 +214,10 @@ public class OverlayView extends View {
         }
 
         // Draw shadow mask first (if exists) - only within overlay area
-        if (shadowMask != null && !shadowMask.isRecycled() && overlayRect != null) {
+        if (scaledShadowMask != null && !scaledShadowMask.isRecycled() && overlayRect != null) {
             canvas.save();
             canvas.clipRect(overlayRect);
-
-            @SuppressLint("DrawAllocation")
-            Bitmap scaled = Bitmap.createScaledBitmap(shadowMask, getWidth(), getHeight(), false);
-            canvas.drawBitmap(scaled, 0, 0, shadowPaint);
-
+            canvas.drawBitmap(scaledShadowMask, 0, 0, shadowPaint);
             canvas.restore();
         }
 
