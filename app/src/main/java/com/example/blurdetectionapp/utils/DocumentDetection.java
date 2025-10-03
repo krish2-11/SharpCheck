@@ -19,11 +19,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * Implements a final, unified, and robust document detection pipeline using
- * a highly-tuned K-Means Color Clustering algorithm. This single pipeline is
- * designed to be robust against textured backgrounds, shadows, and jitter.
- */
 public class DocumentDetection {
 
     private static final String TAG = "DocumentDetection";
@@ -33,7 +28,7 @@ public class DocumentDetection {
     private static final double JITTER_REJECTION_THRESHOLD_PERCENT = 0.03; // 3% of image width
     private static final double MOVEMENT_RESET_THRESHOLD_PERCENT = 0.20; // 20% of image width
     private static final double DOWNSCALE_IMAGE_SIZE = 200.0;
-    private static final double EXPANSION_PERCENT = 0.02; // Expand by 2% for a tighter fit
+    private static final double EXPANSION_PERCENT = 0.25; // Expand by 25% for a tighter fit
 
     private Point[] stableCorners = null;
     private int framesSinceLastDetection = 0;
@@ -160,13 +155,6 @@ public class DocumentDetection {
         return applyExponentialSmoothing(newCorners, stableCorners);
     }
 
-    // --- HELPER METHODS ---
-    private String cornersToString(Point[] corners) {
-        if (corners == null) return "null";
-        return String.format(Locale.US, "[(%.0f,%.0f), (%.0f,%.0f), (%.0f,%.0f), (%.0f,%.0f)]",
-                corners[0].x, corners[0].y, corners[1].x, corners[1].y,
-                corners[2].x, corners[2].y, corners[3].x, corners[3].y);
-    }
     private Mat createMaskFromLabels(Mat labels, int clusterIndex, Size outputSize) {
         Mat mask = new Mat(outputSize, CvType.CV_8UC1);
         byte[] maskData = new byte[(int) mask.total()];

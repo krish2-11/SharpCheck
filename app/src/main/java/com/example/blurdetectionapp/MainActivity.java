@@ -247,30 +247,31 @@ public class MainActivity extends AppCompatActivity implements
             public void run() {
                 if (latestFrame != null && !latestFrame.isRecycled()) {
                     try {
-                        // --- FIX 1: Use the full frame, do NOT extract ROI ---
-                        // --- FIX 2: Rotate by 90 degrees, NOT 180 ---
-                        Bitmap rotatedFrame = ImageUtils.rotateBitmap(latestFrame, 90);
+                        Bitmap roiBitmap = extractROIFromFrame(latestFrame);
+                        if (roiBitmap != null) {
+                            Bitmap rotatedFrame = ImageUtils.rotateBitmap(roiBitmap, 90);
 
-                        // Detect corners in the full rotated frame
-                        List<Point[]> allCorners = documentDetection.detectDocumentCornersPoints(rotatedFrame);
+                            // Detect corners in the full rotated frame
+                            List<Point[]> allCorners = documentDetection.detectDocumentCornersPoints(rotatedFrame);
 
-                        if (allCorners != null && !allCorners.isEmpty()) {
-                            // The method already finds the best one, so just get the first
-                            Point[] corners = allCorners.get(0);
+                            if (allCorners != null && !allCorners.isEmpty()) {
+                                // The method already finds the best one, so just get the first
+                                Point[] corners = allCorners.get(0);
 
-                            lastStableCorners = corners;
-                            lastFrameSize = new android.util.Size(rotatedFrame.getWidth(), rotatedFrame.getHeight());
+                                lastStableCorners = corners;
+                                lastFrameSize = new android.util.Size(rotatedFrame.getWidth(), rotatedFrame.getHeight());
 
-                            // --- FIX 3: Map corners from the full frame's coordinates to the view's coordinates ---
-                            PointF[] mappedPoints = mapPointsToOverlay(corners, rotatedFrame.getWidth(), rotatedFrame.getHeight(), overlayView);
-                            runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
-                        } else {
-                            runOnUiThread(() -> overlayView.clearCorners());
-                        }
+                                // --- FIX 3: Map corners from the full frame's coordinates to the view's coordinates ---
+                                PointF[] mappedPoints = mapPointsToOverlay(corners, rotatedFrame.getWidth(), rotatedFrame.getHeight(), overlayView);
+                                runOnUiThread(() -> overlayView.setDocumentCorners(mappedPoints));
+                            } else {
+                                runOnUiThread(() -> overlayView.clearCorners());
+                            }
 
-                        // Clean up the rotated bitmap
-                        if (rotatedFrame != latestFrame) {
-                            rotatedFrame.recycle();
+                            // Clean up the rotated bitmap
+                            if (rotatedFrame != latestFrame) {
+                                rotatedFrame.recycle();
+                            }
                         }
 
                     } catch (Exception e) {
@@ -287,32 +288,6 @@ public class MainActivity extends AppCompatActivity implements
         };
         cornerHandler.post(cornerRunnable);
     }
-
-    // NEW METHOD: Map corners from ROI coordinates to overlay view coordinates
-    private PointF[] mapROICornersToOverlay(Point[] corners, Bitmap roiBitmap) {
-        if (overlayRect == null) {
-            return mapPointsToOverlay(corners, roiBitmap.getWidth(), roiBitmap.getHeight(), overlayView);
-        }
-
-        // Map corners from ROI bitmap coordinates to overlay view coordinates
-        PointF[] mapped = new PointF[4];
-        for (int i = 0; i < 4; i++) {
-            float x = (float) (corners[i].x * overlayRect.width() / roiBitmap.getWidth());
-            float y = (float) (corners[i].y * overlayRect.height() / roiBitmap.getHeight());
-            mapped[i] = new PointF(overlayRect.left + x, overlayRect.top + y);
-        }
-
-        return mapped;
-    }
-
-    private Point[] getLargestDocumentCorners(List<Point[]> allCorners, DocumentDetection detector) {
-        if (allCorners == null || allCorners.isEmpty()) {
-            return null;
-        }
-        // allCorners is already sorted by area descending in DocumentDetection, so take first
-        return allCorners.get(0);
-    }
-
 
     private PointF[] mapPointsToOverlay(Point[] points, int imgWidth, int imgHeight, View overlayView) {
         int viewWidth = overlayView.getWidth();
@@ -340,27 +315,6 @@ public class MainActivity extends AppCompatActivity implements
         return mapped;
     }
 
-    private PointF[] expandDocumentCorners(PointF[] corners) {
-        float centerX = 0, centerY = 0;
-        for (PointF p : corners) {
-            centerX += p.x;
-            centerY += p.y;
-        }
-        centerX /= corners.length;
-        centerY /= corners.length;
-
-        PointF[] expanded = new PointF[corners.length];
-        for (int i = 0; i < corners.length; i++) {
-            float dx = corners[i].x - centerX;
-            float dy = corners[i].y - centerY;
-            expanded[i] = new PointF(
-                    centerX + dx * (float) 1.25,
-                    centerY + dy * (float) 1.25
-            );
-        }
-        return expanded;
-    }
-
     @SuppressLint("SetTextI18n")
     private void onCaptureClicked() {
         if (cameraManager != null) {
@@ -381,88 +335,45 @@ public class MainActivity extends AppCompatActivity implements
         capturedBitmap = bitmap;
 
         mainHandler.post(() -> {
-            if (lastStableCorners == null || lastFrameSize == null) {
-                Toast.makeText(this, "No document was detected to capture.", Toast.LENGTH_SHORT).show();
-                imageView.setImageBitmap(bitmap);
-                imageView2.setImageBitmap(bitmap);
-                showResultsView();
-                updateCaptureButtonState(true);
+
+            if (lastStableCorners == null) {
+                Toast.makeText(this, "No document detected in preview.", Toast.LENGTH_SHORT).show();
+                imageView2.setImageResource(R.drawable.no_document);
                 return;
             }
 
-            Log.d(TAG, "Using last stable corners for capture: " + java.util.Arrays.toString(lastStableCorners));
-            imageView.setImageBitmap(bitmap);
+            Bitmap roiBitmap = extractROIFromFrame(latestFrame != null ? latestFrame : bitmap);
+            if (roiBitmap != null) {
+            roiBitmap = ImageUtils.rotateBitmap(roiBitmap , 90);
+            imageView.setImageBitmap(roiBitmap);
 
-            // --- FINAL, MATHEMATICALLY CORRECT SCALING AND WARPING LOGIC ---
-
-            // 1. Get dimensions
-            // High-resolution original capture (e.g., 3000x4000)
-            float highResOriginalWidth = bitmap.getWidth();
-            float highResOriginalHeight = bitmap.getHeight();
-            // Low-resolution rotated preview (e.g., 640x480)
-            float lowResRotatedWidth = lastFrameSize.getWidth();
-            float lowResRotatedHeight = lastFrameSize.getHeight();
-
-            // 2. Calculate separate scale factors for X and Y to handle all aspect ratios.
-            float scaleX = highResOriginalWidth / lowResRotatedHeight;
-            float scaleY = highResOriginalHeight / lowResRotatedWidth;
-
-            Point[] originalCorners = new Point[4];
-            for (int i = 0; i < 4; i++) {
-                Point lowResCorner = lastStableCorners[i];
-
-                // 3. This is the corrected transformation from a +90 degree rotated space.
-                // The original X coordinate comes from the rotated Y coordinate.
-                // The original Y coordinate comes from the rotated X coordinate.
-                double original_x = lowResCorner.y * scaleX;
-                double original_y = (lowResRotatedWidth - lowResCorner.x) * scaleY;
-
-                originalCorners[i] = new Point(original_x, original_y);
+            // 3. Detect corners in ROI (optional)
+            List<Point[]> detectedCorners = documentDetection.detectDocumentCornersPoints(roiBitmap);
+            Point[] roiCorners;
+            if (detectedCorners != null && !detectedCorners.isEmpty()) {
+                roiCorners = detectedCorners.get(0);
+            } else {
+                // fallback: use lastStableCorners relative to ROI
+                roiCorners = new Point[lastStableCorners.length];
+                for (int i = 0; i < lastStableCorners.length; i++) {
+                    roiCorners[i] = new Point(
+                            lastStableCorners[i].x,
+                            lastStableCorners[i].y
+                    );
+                }
             }
 
-            // 4. Warp the ORIGINAL high-resolution image using the final, perfectly mapped corners.
-            Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(bitmap, originalCorners);
-
-            if (warpedBitmap != null) {
-                imageView2.setImageBitmap(warpedBitmap);
-            } else {
-                Toast.makeText(this, "Could not create a top-down view.", Toast.LENGTH_SHORT).show();
-                imageView2.setImageResource(R.drawable.no_document);
+            // 4. Warp ROI
+            Bitmap warpedBitmap = documentDetection.warpToDocumentFromPoints(roiBitmap, roiCorners);
+            // 5. Display
+            imageView2.setImageBitmap(warpedBitmap);
+            //roiBitmap2.recycle();
             }
 
             showResultsView();
             updateCaptureButtonState(true);
         });
     }
-
-    // NEW METHOD: Scale corners from ROI to captured image coordinates
-    private Point[] scaleCornersToCapturedImage(Point[] roiCorners, Bitmap roiBitmap, Bitmap capturedBitmap) {
-        if (roiCorners == null || capturedBitmap == null) {
-            Log.w(TAG, "Invalid inputs for corner scaling; returning null.");
-            return null;
-        }
-        if (overlayRect == null) {
-            Log.w(TAG, "overlayRect null; falling back to full image corners (no scaling).");
-            // Detect corners directly on full captured (add this fallback)
-            Bitmap rotatedCaptured = ImageUtils.rotateBitmap(capturedBitmap, 180);
-            List<Point[]> allCorners = documentDetection.detectDocumentCornersPoints(rotatedCaptured);
-            Point[] fullCorners = getLargestDocumentCorners(allCorners, documentDetection);
-            if (rotatedCaptured != capturedBitmap) rotatedCaptured.recycle();
-            return fullCorners != null ? shrinkBottomCorners(fullCorners) : null;  // Use full corners
-        }
-
-        Rect capturedROI = scaleRectToBitmap(overlayRect, capturedBitmap.getWidth(), capturedBitmap.getHeight(),
-                overlayView.getWidth(), overlayView.getHeight());
-
-        Point[] scaledCorners = new Point[4];
-        for (int i = 0; i < 4; i++) {
-            double x = roiCorners[i].x * capturedROI.width() / roiBitmap.getWidth();
-            double y = roiCorners[i].y * capturedROI.height() / roiBitmap.getHeight();
-            scaledCorners[i] = new Point(capturedROI.left + x, capturedROI.top + y);
-        }
-        return shrinkBottomCorners(scaledCorners);  // Now consistent
-    }
-
 
     private Rect scaleRectToBitmap(RectF rectInView, int bmpW, int bmpH, int viewW, int viewH) {
         if (viewW <= 0 || viewH <= 0) {
@@ -494,82 +405,6 @@ public class MainActivity extends AppCompatActivity implements
 
         return new Rect(left, top, right, bottom);
     }
-
-
-    private PointF[] shrinkBottomCorners(PointF[] corners) {
-        if (corners == null || corners.length < 4) return corners;
-
-        // Find min and max Y
-        float minY = Float.MAX_VALUE;
-        float maxY = Float.MIN_VALUE;
-        for (PointF p : corners) {
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
-        }
-        float height = maxY - minY;
-        if (height <= 0) return corners;
-
-        float shrink = height * 0.05f; // e.g. 0.05 = shrink by 5%
-
-        // Find two bottom-most points
-        int idx1 = -1, idx2 = -1;
-        float max1 = Float.MIN_VALUE, max2 = Float.MIN_VALUE;
-        for (int i = 0; i < corners.length; i++) {
-            if (corners[i].y > max1) {
-                max2 = max1;
-                idx2 = idx1;
-                max1 = corners[i].y;
-                idx1 = i;
-            } else if (corners[i].y > max2) {
-                max2 = corners[i].y;
-                idx2 = i;
-            }
-        }
-
-        // Move bottom two upward
-        if (idx1 >= 0) corners[idx1].y = Math.max(corners[idx1].y - shrink, minY);
-        if (idx2 >= 0) corners[idx2].y = Math.max(corners[idx2].y - shrink, minY);
-
-        return corners;
-    }
-
-    private Point[] shrinkBottomCorners(Point[] corners) {
-        if (corners == null || corners.length < 4) return corners;
-
-        // Find min and max Y
-        double minY = Double.MAX_VALUE;
-        double maxY = Double.MIN_VALUE;
-        for (Point p : corners) {
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
-        }
-        double height = maxY - minY;
-        if (height <= 0) return corners;
-
-        double shrink = height * 0.15; // e.g. 0.15 = shrink by 15%
-
-        // Find two bottom-most points
-        int idx1 = -1, idx2 = -1;
-        double max1 = Double.MIN_VALUE, max2 = Double.MIN_VALUE;
-        for (int i = 0; i < corners.length; i++) {
-            if (corners[i].y > max1) {
-                max2 = max1;
-                idx2 = idx1;
-                max1 = corners[i].y;
-                idx1 = i;
-            } else if (corners[i].y > max2) {
-                max2 = corners[i].y;
-                idx2 = i;
-            }
-        }
-
-        // Move bottom two upward
-        if (idx1 >= 0) corners[idx1].y = Math.max(corners[idx1].y - shrink, minY);
-        if (idx2 >= 0) corners[idx2].y = Math.max(corners[idx2].y - shrink, minY);
-
-        return corners;
-    }
-
 
     @Override
     public void onCaptureError(String error) {

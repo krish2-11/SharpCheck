@@ -60,9 +60,9 @@ dependencies {
 //    implementation 'org.tensorflow:tensorflow-lite:2.13.0'
 //    implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
 
-    implementation 'com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1'
-    implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.0'
-    implementation 'com.google.mlkit:text-recognition:16.0.0'
+    implementation libs.play.services.mlkit.document.scanner
+    implementation libs.play.services.mlkit.text.recognition
+    implementation libs.text.recognition
 
 
     // Lifecycle components
